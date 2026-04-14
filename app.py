@@ -95,7 +95,7 @@ st.sidebar.divider()
 st.sidebar.markdown("### 🌍 Target Markets")
 options = [
     "Manual", "FTSE 100 (UK)", "FTSE 250 (UK)", "FTSE SmallCap (UK)", "DAX 40 (Germany)", "CAC 40 (France)", 
-    "IBEX 35 (Spain)", "WIG 20 (Poland)", "FTSE MIB (Italy)", "S&P 500 (US)", 
+    "IBEX 35 (Spain)", "WIG 20 (Poland)", "FTSE MIB (Italy)", "Euronext (Netherlands)", "S&P 500 (US)", 
     "S&P 400 MidCap (US)", "S&P 600 SmallCap (US)", "Nasdaq 100 (US)"
 ]
 selected_markets = st.sidebar.multiselect("Select Indices:", options, default=["FTSE 100 (UK)"])
