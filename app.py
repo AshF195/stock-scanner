@@ -725,14 +725,27 @@ with tab4:
         for tick, data in st.session_state.portfolio.items():
             port_row_map.append(tick) # Map the row index for the editor interceptor
             
+            company_name = data.get("Company", tick)
+            
             try:
-                live_price = float(yf.Ticker(tick).history(period="1d")["Close"].iloc[-1])
-            except:
+                # Call your master function directly! 
+                # We pass 0 for all filters so we don't accidentally hide stocks you own
+                result = process_ticker(tick, company_name, p_min=0, v_min=0, min_yield_filter=0, last_price_memory=0.0)
+                
+                if result is not None:
+                    live_signal = result["Signal"]
+                    live_price = float(result["Price ($)"])
+                else:
+                    # Failsafe if the stock has < 200 days of data
+                    live_price = float(data.get('Entry Price', 0.0))
+                    live_signal = "⚪ NEUTRAL (No Data)"
+                    
+            except Exception as e:
                 live_price = float(data.get('Entry Price', 0.0))
+                live_signal = "Error"
                 
             entry_price = float(data.get('Entry Price', 0.0))
             pnl_pct = ((live_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
-            
             invested_amount = float(data.get('Amount', 0.0))
             
             # Calculate live values only if you actually own it
@@ -747,34 +760,14 @@ with tab4:
                 "Ticker": tick,
                 "Status": data["Status"],
                 "Date": data.get("Date Added", ""),
-                "Signal": data.get("Signal", ""),
-                "Company": data.get("Company", tick),
+                "Signal": live_signal,  # <-- Now pulls "🔥 PRIME BULL", etc.
+                "Company": company_name,
                 "Entry Price": entry_price,
                 "Live Price": live_price,
                 "Invested (£)": invested_amount,
                 "Current Val (£)": current_pos_val,
                 "P&L %": pnl_pct
             })
-            
-        st.session_state.port_row_map = port_row_map
-        df_port = pd.DataFrame(portfolio_data)
-        
-        # Order columns cleanly
-        cols = ['Status', 'Ticker', 'Company', 'Entry Price', 'Live Price', 'Invested (£)', 'Current Val (£)', 'P&L %', 'Signal', 'Date']
-        df_port = df_port[[c for c in cols if c in df_port.columns]]
-        
-        # Display the Top Metrics
-        total_pnl_pct = ((current_value - total_invested) / total_invested) * 100 if total_invested > 0 else 0
-        pm1, pm2, pm3 = st.columns(3)
-        pm1.metric("Total Invested (£)", f"£{total_invested:.2f}")
-        pm2.metric("Current Value (£)", f"£{current_value:.2f}", f"£{current_value - total_invested:.2f}")
-        pm3.metric("Total P&L %", f"{total_pnl_pct:.2f}%")
-        
-        def color_pnl(val):
-            if isinstance(val, (int, float)):
-                if val > 0: return 'color: #00FF00'
-                elif val < 0: return 'color: #FF4B4B'
-            return ''
             
         # 4. Render the interactive table
         st.data_editor(
