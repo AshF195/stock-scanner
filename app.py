@@ -769,6 +769,24 @@ with tab4:
                 "P&L %": pnl_pct
             })
             
+        # --- CONVERT TO DATAFRAME & DEFINE COLORS ---
+        
+        # Save the row map to session state so the editor interceptor works perfectly
+        st.session_state["port_row_map"] = port_row_map 
+        
+        # Convert list to a Pandas DataFrame
+        df_port = pd.DataFrame(portfolio_data)
+        
+        # Define the coloring function
+        def color_pnl(val):
+            if isinstance(val, (int, float)):
+                if val > 0:
+                    return 'color: #00FF00'  # Bright green
+                elif val < 0:
+                    return 'color: #FF4B4B'  # Streamlit red
+            return ''
+        # --------------------------------------------
+            
         # 4. Render the interactive table
         st.data_editor(
             df_port.style.map(color_pnl, subset=["P&L %", "Current Val (£)"]), 
