@@ -6,3 +6,5 @@ plotly
 streamlit-autorefresh
 transformers
 torch
+lxml
+html5lib
