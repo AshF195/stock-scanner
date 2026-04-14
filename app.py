@@ -154,15 +154,15 @@ def get_index_constituents(index_name):
 
     # 2.5 Local File Scraper for FTSE SmallCap
     if index_name == "Euronext (Netherlands)":
-        if os.path.exists("Euronext.txt"):
+        if os.path.exists("euronext.txt"):
             valid_pairs = []
-            with open("Euronext.txt", "r", encoding="utf-8") as f:
+            with open("euronext.txt", "r", encoding="utf-8") as f:
                 for line in f:
                     if ',' in line:
                         ticker, name = line.strip().split(',', 1)
                         valid_pairs.append((ticker.strip(), name.strip()))
             if valid_pairs: return valid_pairs
-        return [("AAPL", "Apple - Missing Euronext.txt")]
+        return [("AAPL", "Apple - Missing euronext.txt")]
     
 
     # 3. Standard Wikipedia Scraper for remaining indices
