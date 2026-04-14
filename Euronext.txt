@@ -1,0 +1,60 @@
+ASML.AS,ASML Holding
+SHELL.AS,Shell
+INGA.AS,ING Groep
+PRX.AS,Prosus
+ASM.AS,ASM International
+ADYEN.AS,Adyen
+MT.AS,ArcelorMittal
+BESI.AS,BE Semiconductor
+UNA.AS,Unilever
+AD.AS,Ahold Delhaize
+ABN.AS,ABN AMRO Bank
+UMG.AS,Universal Music Group
+AGN.AS,Aegon
+WKL.AS,Wolters Kluwer
+KPN.AS,KPN
+NN.AS,NN Group
+REN.AS,RELX
+DSFIR.AS,DSM-Firmenich
+AKZA.AS,Akzo Nobel
+HEIA.AS,Heineken
+IMCD.AS,IMCD
+ASRNL.AS,ASR Nederland
+PHIA.AS,Philips
+PHARM.AS,Pharming Group
+INPST.AS,InPost
+SBMO.AS,SBM Offshore
+LIGHT.AS,Signify
+RAND.AS,Randstad
+CVC.AS,CVC Capital Partners
+EXO.AS,Exor
+HEIO.AS,Heineken Holding
+AMG.AS,AMG
+VPK.AS,Vopak
+ARCAD.AS,Arcadis
+AALB.AS,Aalberts
+BAMNB.AS,BAM Groep
+HEIJM.AS,Heijmans
+AVTX.AS,Avantium
+APAM.AS,Aperam
+BFIT.AS,Basic-Fit
+TWEKA.AS,TKH Group
+THEON.AS,Theon International
+CTP.AS,CTP
+ALLFG.AS,Allfunds Group
+FUR.AS,Fugro
+FLOW.AS,Flow Traders
+VLK.AS,Van Lanschot Kempen
+ECMPA.AS,Eurocommercial Properties
+HAL.AS,HAL Trust
+PNL.AS,PostNL
+OCI.AS,OCI
+JDEP.AS,JDE Peet's
+CMCOM.AS,CM.com
+TOM2.AS,TomTom
+GLPG.AS,Galapagos
+ALFEN.AS,Alfen
+FAST.AS,Fastned
+SIFG.AS,SIF Holding
+NXF.AS,NX Filtration
+AZRN.AS,Azerion
