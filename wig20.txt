@@ -1,0 +1,20 @@
+CDR.WA,CD Projekt
+ZAB.WA,Zabka Group
+KGH.WA,KGHM Polska Miedz
+ALE.WA,Allegro.eu
+BDX.WA,Budimex
+PKO.WA,PKO Bank Polski
+CCC.WA,CCC
+LPP.WA,LPP
+PEO.WA,Bank Pekao
+ALR.WA,Alior Bank
+SPL.WA,Santander Bank Polska
+KRU.WA,Kruk
+MBK.WA,mBank
+KTY.WA,Grupa Kety
+PZU.WA,PZU
+PCO.WA,Pepco Group
+DNP.WA,Dino Polska
+PGE.WA,PGE Polska Grupa Energetyczna
+TPE.WA,Tauron Polska Energia
+PKN.WA,Orlen

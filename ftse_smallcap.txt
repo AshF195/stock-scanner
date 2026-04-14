@@ -1,0 +1,175 @@
+MCG.L, Mobico Group PLC
+ATG.L, Auction Technology Group PLC
+SFR.L, Severfield PLC
+EVOK.L, Evoke PLC
+MNL.L, Manchester & London Inv Tst PLC
+SDY.L, Speedy Hire PLC
+XPP.L, XP Power LD
+REC.L, Record PLC
+NESF.L, NextEnergy Solar Fund Limited
+FXPO.L, Ferrexpo PLC
+LIO.L, Liontrust Asset Management PLC
+RCH.L, Reach PLC
+AT.L, Ashtead Technology Holdings PLC
+GYM.L, The Gym Group PLC
+OTB.L, On The Beach Group PLC
+CLI.L, CLS Holdings PLC
+MMIT.L, Mobius Investment Trust PLC
+AAIF.L, Aberdeen Asian Income Fund Limited
+CHI.L, CT UK High Income Trust PLC
+FUTR.L, Future PLC
+DFS.L, DFS Furniture PLC
+JEMA.L, JPMorgan Emerging EMEA Secs PLC
+SCP.L, Schroder UK Mid Cap FD PLC
+LTI.L, Lindsell Train Investment Trust PLC
+SST.L, Scottish Oriental Smlr Co Tst PLC
+FSFL.L, Foresight Solar Fund LD
+CYN.L, CQS Natural Res Growth & Income PLC
+RM.L, RM PLC
+KMR.L, Kenmare Resources PLC
+NRR.L, NewRiver REIT PLC
+CTPE.L, CT Private Equity Trust PLC
+BRLA.L, Blackrock Latin American Inv Tst PLC
+CTHT.L, CT Healthcare Trust PLC
+BRFI.L, Blackrock FR PLC
+STS.L, STS Global Income & Growth Tst PLC
+EOT.L, European Opportunities Trust PLC
+PRV.L, Porvair PLC
+BOOT.L, Boot (Henry) PLC
+SJG.L, Schroder Japan Trust PLC
+NAVF.L, Nippon Active Value Fund PLC
+PINE.L, Pinewood Technologies Group PLC
+IBT.L, International Biotechnology Tst PLC
+SUS.L, S & U PLC
+SEC.L, Strategic Equity Capital PLC
+NAIT.L, North American Income Tst PLC
+FDM.L, FDM Group (Holdings) PLC
+SWC.L, The Smarter Web Company PLC
+BASC.L, Brown Advisory US Smaller Co's PLC
+BGUK.L, Baillie Gifford UK Growth Trust PLC
+MTU.L, Montanaro UK Smlr Cos Inv Tst PLC
+FORT.L, Forterra PLC
+JAGI.L, JPMorgan Asia Growth & Income PLC
+AUSC.L, Aberdn UK Small.Co's Growth Tst PLC
+RIII.L, Rights & Issues Inv Tst PLC
+ZTF.L, Zotefoams PLC
+CARD.L, Card Factory PLC
+MACF.L, Macfarlane Group PLC
+EGL.L, Ecofin Glbl Util & Inf Tst PLC
+BERI.L, Blackrock Energy & Res. Inc.Tst PLC
+PBEE.L, PensionBee Group PLC
+DIG.L, Dunedin Income Growth Inv Tst PLC
+MER.L, Mears Group PLC
+ASC.L, ASOS PLC
+SREI.L, Schroder Real Estate Inv. Tst. LD
+OIT.L, Odyssean Investment Trust PLC
+JUGI.L, JPMorgan UK Small Cap Growth & Inc
+MTE.L, Montanaro European Smaller C.Tst PLC
+BIOG.L, Biotech Growth Trust PLC
+CRST.L, Crest Nicholson Holdings PLC
+LWI.L, Lowland Inv Co PLC
+ARR.L, Aurora UK Alpha PLC
+ELIX.L, Elixirr International PLC
+MARS.L, Marston's PLC
+FOXT.L, Foxtons Group PLC
+INOV.L, Schroders Capital Global Innovation PLC
+VP.L, VP PLC
+IGET.L, Invesco Glbl Equity Inc Trust PLC
+HEAD.L, Headlam Group PLC
+RECI.L, Real Estate Credit Inv. LD
+MAJE.L, Majedie Inv PLC
+OIG.L, Oryx International Growth Fund LD
+BGEU.L, Baillie Gifford European Growth Trus
+STEM.L, SThree PLC
+SCF.L, Schroder Income Growth Fund PLC
+PCTN.L, Picton Property Income LD
+MWY.L, Mid Wynd Intl Inv Tst PLC
+HHI.L, Henderson High Income Trust PLC
+TBTG.L, The Beauty Tech Group PLC
+JUSC.L, JPMorgan US Smaller Co. Inv Tst PLC
+FAS.L, Fidelity Asian Values PLC
+AEWU.L, AEW UK REIT PLC
+GLE.L, MJ Gleeson PLC
+PRTC.L, Puretech Health PLC
+PCFT.L, Polar Capital Global Fin. Tst PLC
+JCH.L, JPMorgan Claverhouse IT PLC
+ASLI.L, Abrdn European Logistics Income PLC
+FVA.L, Fevara PLC
+LUCE.L, Luceco PLC
+SBRE.L, Sabre Insurance Group PLC
+SOHO.L, Social Housing REIT PLC
+BGCG.L, Baillie Gifford China Grwth Tst PLC
+GABI.L, GCP Asset Backed Income Fund Ltd
+TPT.L, Topps Tiles PLC
+MIGO.L, Migo Opportunities Trust PLC
+HSW.L, Hostelworld Group PLC
+AEI.L, Aberdeen Equity Income Trust PLC
+CVCG.L, CVC Income & Growth Limited
+FSJ.L, Fisher (James) & Sons PLC
+BGS.L, Baillie Gifford Shin Nippon PLC
+CAPD.L, Capital LD Comm Shs
+RMII.L, RM Infrastructure Income PLC
+ANII.L, Aberdeen New India Inv Trust PLC
+CTUK.L, CT UK Cap And Inc Inv Trust PLC
+BIPS.L, Invesco Bond Income Plus Limited
+AJOT.L, Avi Japan Opportunity Trust PLC
+ECOR.L, Ecora Royalties PLC
+SMIF.L, Twentyfour Select Monthly Income FD
+ESNT.L, Essentra PLC
+CCJI.L, CC Japan Income & Growth Trust PLC
+JCGI.L, JPMorgan China Growth & Income PLC
+DGI9.L, Digital 9 Infrastructure PLC
+STB.L, Secure Trust Bank PLC
+RSE.L, Riverstone Energy Limited
+VNH.L, Vietnam Holding LD
+VANQ.L, Vanquis Banking Group PLC
+TTG.L, TT Electronics PLC
+TRI.L, Trifast PLC
+SHI.L, SIG PLC
+PAC.L, Pacific Assets Trust PLC
+LSL.L, LSL Property Services PLC
+HFD.L, Halfords Group PLC
+GSF.L, Gore Street Energy Storage Fund PLC
+FSTA.L, Fuller, Smith & Turner PLC
+ECEL.L, Eurocell PLC
+BRAI.L, Blackrock American Income Trust PLC
+AUGM.L, Augmentum Fintech PLC
+AGVI.L, Aberforth Geared Value & Income Trust
+MCB.L, McBride PLC
+VIP.L, Value And Indexed Prop Inc Trust
+AFL.L, Artemis UK Future Leaders PLC
+MGCI.L, M&G Credit Income Investment Trust
+IGC.L, India Capital Growth Fund LD
+CREI.L, Custodian Property Income REIT PLC
+RESI.L, Residential Secure Income PLC
+PSDL.L, Phoenix Spree Deutschland Limited
+RWA.L, Robert Walters PLC
+PAY.L, PayPoint PLC
+GOT.L, Global Opportunities Trust PLC
+NXR.L, Norcros PLC
+BRK.L, Brooks Macdonald Group PLC
+NCYF.L, CQS New City High Yield Fund LD
+BMY.L, Bloomsbury Publishing PLC
+DIVI.L, Diverse Income Trust PLC
+CLIG.L, City Of London Investment Group PLC
+JARA.L, JPMorgan Global Core Real Assets LI
+PZC.L, PZ Cussons PLC
+SERE.L, Schroder European REIT PLC
+RKW.L, Rockwood Strategic PLC
+CABP.L, CAB Payments Holdings PLC
+APTD.L, Aptitude Software Group PLC
+PHAR.L, Pharos Energy PLC
+RGL.L, Regional REIT LD
+SNWS.L, Smiths News PLC
+BMS.L, Braemar PLC
+TET.L, Treatt PLC
+HLCL.L, Helical PLC
+MOTR.L, Motorpoint Group PLC
+ENQ.L, Enquest PLC
+ENRG.L, VH Global Energy Infrastructure PLC
+XAR.L, Xaar PLC
+CNE.L, Capricorn Energy PLC
+SSIT.L, Seraphim Space Investment Trust PLC
+TMIP.L, Taylor Maritime Limited
+TLW.L, Tullow Oil PLC
+GMS.L, Gulf Marine Services PLC
