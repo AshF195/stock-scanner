@@ -323,17 +323,17 @@ def analyze_technical_metrics(df):
         today_range = t_h - t_l
         atr_exhaustion = (today_range / atr_14) * 100 if atr_14 > 0 else 0
         
-        # Determine the "Day Outlook" Prediction
+       # Determine the "Day Outlook" Prediction
         if atr_exhaustion > 110:
-            eod_outlook = f"⚠️ Peaked (Overextended {atr_exhaustion:.0f}%)"
+            eod_outlook = f"Peaked ({atr_exhaustion:.0f}%)"
         elif atr_exhaustion > 85:
-            eod_outlook = f"🛑 Exhausting ({atr_exhaustion:.0f}% of Daily Range)"
+            eod_outlook = f"Exhausting ({atr_exhaustion:.0f}%)"
         elif atr_exhaustion < 50 and vol_spike > 2.0:
-            eod_outlook = f"🔥 Early Breakout (Only {atr_exhaustion:.0f}% used)"
+            eod_outlook = f"Early ({atr_exhaustion:.0f}%)"
         else:
-            eod_outlook = f"⚖️ Normal Trading ({atr_exhaustion:.0f}% used)"
+            eod_outlook = f"Normal ({atr_exhaustion:.0f}%)"
             
-        receipt.append(f"**Intraday Fuel**: Used {atr_exhaustion:.1f}% of typical daily move ({eod_outlook})")
+        receipt.append(f"**Intraday Fuel**: {eod_outlook} of typical daily move used")
     except:
         eod_outlook = "N/A"
     # ==========================================
@@ -594,6 +594,14 @@ def apply_dataframe_styling(df, active):
         if val < 30: return 'color: #00FF00; font-weight: bold'
         elif val > 70: return 'color: #FF4B4B; font-weight: bold'
         return ''
+
+    def color_outlook(val):
+        if pd.isna(val) or not isinstance(val, str): return ''
+        if "Peaked" in val: return 'color: #FF4B4B; font-weight: bold'       # Red
+        elif "Exhausting" in val: return 'color: #FFA500; font-weight: bold'   # Orange
+        elif "Early" in val: return 'color: #00FF00; font-weight: bold'        # Green
+        elif "Normal" in val: return 'color: #888888'                          # Grey
+        return ''
         
     def color_vol(val):
         if pd.isna(val): return ''
@@ -613,6 +621,9 @@ def apply_dataframe_styling(df, active):
         
     if "Vol Spike (x)" in df.columns:
         styler = styler.map(color_vol, subset=["Vol Spike (x)"])
+
+    if "Day Outlook" in df.columns:
+        styler = styler.map(color_outlook, subset=["Day Outlook"])
         
     return styler
 
