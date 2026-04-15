@@ -906,7 +906,7 @@ with tab4:
         # Convert list to a Pandas DataFrame
         df_port = pd.DataFrame(portfolio_data)
         
-        # Define the coloring function
+        # Define the coloring functions for the portfolio table
         def color_pnl(val):
             if isinstance(val, (int, float)):
                 if val > 0:
@@ -914,12 +914,19 @@ with tab4:
                 elif val < 0:
                     return 'color: #FF4B4B'  # Streamlit red
             return ''
+
+        def color_outlook_port(val):
+            if pd.isna(val) or not isinstance(val, str): return ''
+            if "Peaked" in val: return 'color: #FF4B4B; font-weight: bold'       # Red
+            elif "Exhausting" in val: return 'color: #FFA500; font-weight: bold'   # Orange
+            elif "Early" in val: return 'color: #00FF00; font-weight: bold'        # Green
+            elif "Normal" in val: return 'color: #888888'                          # Grey
+            return ''
         # --------------------------------------------
             
         # 4. Render the interactive table
         st.data_editor(
-            # Added the .map() for color_outlook right here!
-            df_port.style.map(color_pnl, subset=["P&L %", "Current Val (£)"]).map(color_outlook, subset=["Day Outlook"] if "Day Outlook" in df_port.columns else []), 
+            df_port.style.map(color_pnl, subset=["P&L %", "Current Val (£)"]).map(color_outlook_port, subset=["Day Outlook"] if "Day Outlook" in df_port.columns else []), 
             hide_index=True, 
             use_container_width=True,
             column_config={
@@ -930,7 +937,6 @@ with tab4:
                 "Current Val (£)": st.column_config.NumberColumn("Current Val (£)", format="£%.2f"),
                 "P&L %": st.column_config.NumberColumn("P&L %", format="%.2f%%")
             },
-            # Added "Day Outlook" to the disabled editing list
             disabled=["Ticker", "Company", "Live Price", "Current Val (£)", "P&L %", "Signal", "Date", "Day Outlook"], 
             key="portfolio_editor"
         )
