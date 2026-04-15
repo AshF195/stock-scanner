@@ -629,7 +629,7 @@ col_config_settings = {
     "Yield %": st.column_config.NumberColumn(format="%.2f")
 }
 
-display_cols_main = ["Track", "Signal", "Ticker", "Company", "Total Score", "Core Tech Score", "Oscillator Score", "Catalyst Score", "Price ($)", "Gap %", "Yield %"]
+display_cols_main = ["Track", "Signal", "Ticker", "Company", "Day Outlook" "Total Score", "Core Tech Score", "Oscillator Score", "Catalyst Score", "Price ($)", "Gap %", "Yield %"]
 display_cols_detailed = ["Vol Spike (x)", "RSI", "MACD Status", "BB Status", "Short Int %", "Breakout", "AI Sentiment", "Upcoming Event"]
 
 # -----------------------------
