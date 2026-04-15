@@ -604,7 +604,8 @@ with tab1:
                         results.append(res)
                 except concurrent.futures.TimeoutError:
                     st.toast(f"⚠️ Skipped {ticker} (Yahoo Finance timed out)")
-                except Exception: pass
+                except Exception as e: 
+                    st.write(f"Error on {ticker}: {e}") # <-- This will print the exact bug to your screen
                 progress_bar.progress((i + 1) / len(final_target_list))
                 status_text.text(f"Processed {i+1} / {len(final_target_list)}...")
                 
