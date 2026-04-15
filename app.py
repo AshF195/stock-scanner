@@ -267,6 +267,15 @@ def calculate_rsi(price_series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+def calculate_atr(high, low, close, period=14):
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    # True Range is the maximum of the three
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+    return atr
+
 def calculate_macd(price_series):
     ema_12 = price_series.ewm(span=12, adjust=False).mean()
     ema_26 = price_series.ewm(span=26, adjust=False).mean()
@@ -283,30 +292,56 @@ def calculate_bollinger(price_series, window=20):
     return upper, lower
 
 def analyze_technical_metrics(df):
+    # *CRITICAL UPDATE*: Added "N/A" to the end of this empty return list 
+    # to match the new 12-item return limit (to prevent crashes on empty data)
     if df.empty or len(df) < 200: 
-        return 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, []
+        return 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, [], "N/A"
     
     receipt = []
     c, o, v = df["Close"].squeeze(), df["Open"].squeeze(), df["Volume"].squeeze()
     
-    # *NEW* Fetching High and Low for candlestick analysis
+    # Fetching High and Low for candlestick analysis
     h, l = df["High"].squeeze(), df["Low"].squeeze()
     t_h, t_l = float(h.iloc[-1]), float(l.iloc[-1])
     
     y_c, t_o, t_v, t_c = float(c.iloc[-2]), float(o.iloc[-1]), float(v.iloc[-1]), float(c.iloc[-1])
     avg_v = float(v.iloc[-11:-1].mean())
+    vol_spike = t_v / avg_v if avg_v > 0 else 1.0 # Moved this up slightly so ATR can use it
+    
     sma_50 = float(c.rolling(50).mean().iloc[-2])
     sma_200 = float(c.rolling(200).mean().iloc[-2])
 
     rsi = calculate_rsi(c).iloc[-1]
     macd_line, macd_signal, macd_hist = calculate_macd(c)
     bb_upper, bb_lower = calculate_bollinger(c)
-    
+
+    # ==========================================
+    # *NEW* ATR DAILY GAS TANK CALCULATION
+    # ==========================================
+    try:
+        atr_14 = calculate_atr(df["High"], df["Low"], df["Close"]).iloc[-1]
+        today_range = t_h - t_l
+        atr_exhaustion = (today_range / atr_14) * 100 if atr_14 > 0 else 0
+        
+        # Determine the "Day Outlook" Prediction
+        if atr_exhaustion > 110:
+            eod_outlook = f"⚠️ Peaked (Overextended {atr_exhaustion:.0f}%)"
+        elif atr_exhaustion > 85:
+            eod_outlook = f"🛑 Exhausting ({atr_exhaustion:.0f}% of Daily Range)"
+        elif atr_exhaustion < 50 and vol_spike > 2.0:
+            eod_outlook = f"🔥 Early Breakout (Only {atr_exhaustion:.0f}% used)"
+        else:
+            eod_outlook = f"⚖️ Normal Trading ({atr_exhaustion:.0f}% used)"
+            
+        receipt.append(f"**Intraday Fuel**: Used {atr_exhaustion:.1f}% of typical daily move ({eod_outlook})")
+    except:
+        eod_outlook = "N/A"
+    # ==========================================
+
     gap_pct = (t_o - y_c) / y_c if y_c > 0 else 0
     gap_score = 5 if gap_pct > 0.08 else 4 if gap_pct > 0.05 else 2 if gap_pct > 0.02 else -5 if gap_pct < -0.08 else -4 if gap_pct < -0.05 else -2 if gap_pct < -0.02 else 0
     if gap_score != 0: receipt.append(f"**{'+' if gap_score > 0 else ''}{gap_score} pts**: Gap Size ({gap_pct*100:.2f}%)")
 
-    vol_spike = t_v / avg_v if avg_v > 0 else 1.0
     vol_base = 6 if vol_spike > 5.0 else 4 if vol_spike > 3.0 else 2 if vol_spike > 1.5 else 0
     vol_score = vol_base if gap_pct >= 0 else -vol_base
     if vol_score != 0: receipt.append(f"**{'+' if vol_score > 0 else ''}{vol_score} pts**: Volume Spike ({vol_spike:.1f}x)")
@@ -332,10 +367,8 @@ def analyze_technical_metrics(df):
     core_score = gap_score + vol_score + trend_score
 
     # ==========================================
-    # *NEW* RISK MANAGEMENT PENALTIES
+    # RISK MANAGEMENT PENALTIES & BONUSES
     # ==========================================
-    
-    # 1. Reversal Wicks (Tops and Bottoms)
     candle_range = t_h - t_l
     if candle_range > 0:
         # A. The Trap (Shooting Star / Upper Wick)
@@ -350,17 +383,15 @@ def analyze_technical_metrics(df):
         lower_wick_ratio = lower_wick / candle_range
         intraday_max_drop = (t_o - t_l) / t_o if t_o > 0 else 0
         
-        # If it dropped >2% intraday, but buyers pushed it back up so the lower wick is >50% of the candle
         if intraday_max_drop > 0.02 and lower_wick_ratio > 0.5:
             core_score += 3
             receipt.append("**+3 pts**: Bullish Reversal (Strong buying pressure off lows)")
 
-    # 2. Overextension (Rubber Band) Penalty
+    # Overextension (Rubber Band) Penalty
     extension_pct = (t_c - sma_50) / sma_50 if sma_50 > 0 else 0
     if extension_pct > 0.25:
         core_score -= 3
         receipt.append(f"**-3 pts**: Overextended ({extension_pct*100:.1f}% above 50 SMA)")
-        
     # ==========================================
 
     macd_score = 0
@@ -430,7 +461,8 @@ def analyze_technical_metrics(df):
         mom_score -= 2
         receipt.append("**-2 pts**: 1-Month Momentum (< -10%)")
 
-    return core_score, osc_score, mom_score, sma_50, rsi, vol_spike, gap_pct, brk_status, macd_status, bb_status, receipt
+    # *CRITICAL UPDATE*: eod_outlook added to the very end of this return statement!
+    return core_score, osc_score, mom_score, sma_50, rsi, vol_spike, gap_pct, brk_status, macd_status, bb_status, receipt, eod_outlook
 
 
 def process_ticker(ticker, company_name, p_min, v_min, min_yield_filter, last_price_memory):
@@ -451,8 +483,9 @@ def process_ticker(ticker, company_name, p_min, v_min, min_yield_filter, last_pr
     if min_yield_filter > 0 and yield_pct < min_yield_filter: return None
 
     if last_price_memory == 0.0: last_price_memory = latest_close
-
-    core_score, osc_score, mom_score, sma_50, rsi, vol, gap, brk, macd_st, bb_st, receipt = analyze_technical_metrics(df)
+        
+    # Update this line:
+    core_score, osc_score, mom_score, sma_50, rsi, vol, gap, brk, macd_st, bb_st, receipt, eod_outlook = analyze_technical_metrics(df)
     
     cat_score = mom_score
     short_val = 0.0
@@ -527,7 +560,7 @@ def process_ticker(ticker, company_name, p_min, v_min, min_yield_filter, last_pr
     else: label = "⚪ NEUTRAL"
 
     return {
-        "Signal": label, "Ticker": ticker, "Company": company_name, "Total Score": total_score,
+        "Signal": label, "Ticker": ticker, "Company": company_name, "Day Outlook": eod_outlook, "Total Score": total_score,
         "Core Tech Score": core_score, "Oscillator Score": osc_score, "Catalyst Score": cat_score,
         "Price ($)": latest_close, "Gap %": gap * 100, "Vol Spike (x)": vol, "RSI": rsi, 
         "Short Int %": short_val, "Yield %": yield_pct, "MACD Status": macd_st, "BB Status": bb_st,
