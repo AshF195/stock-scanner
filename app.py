@@ -843,7 +843,7 @@ with tab4:
         total_invested = 0.0
         current_value = 0.0
         
-        # 3. Build the live dataframe
+     # 3. Build the live dataframe
         for tick, data in st.session_state.portfolio.items():
             port_row_map.append(tick) # Map the row index for the editor interceptor
             
@@ -857,14 +857,20 @@ with tab4:
                 if result is not None:
                     live_signal = result["Signal"]
                     live_price = float(result["Price ($)"])
+                    # NEW: Pull the Day Outlook safely from the result dictionary
+                    live_outlook = result.get("Day Outlook", "N/A") 
                 else:
                     # Failsafe if the stock has < 200 days of data
                     live_price = float(data.get('Entry Price', 0.0))
                     live_signal = "⚪ NEUTRAL (No Data)"
+                    # NEW: Failsafe string
+                    live_outlook = "N/A" 
                     
             except Exception as e:
                 live_price = float(data.get('Entry Price', 0.0))
                 live_signal = "Error"
+                # NEW: Error string
+                live_outlook = "Error" 
                 
             entry_price = float(data.get('Entry Price', 0.0))
             pnl_pct = ((live_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
@@ -882,9 +888,9 @@ with tab4:
                 "Ticker": tick,
                 "Status": data["Status"],
                 "Date": data.get("Date Added", ""),
-                "Signal": live_signal,  # <-- Now pulls "🔥 PRIME BULL", etc.
+                "Signal": live_signal,
                 "Company": company_name,
-                "Day Outlook": eod_outlook,
+                "Day Outlook": live_outlook, # <-- Pulling the fixed variable here!
                 "Entry Price": entry_price,
                 "Live Price": live_price,
                 "Invested (£)": invested_amount,
@@ -912,7 +918,8 @@ with tab4:
             
         # 4. Render the interactive table
         st.data_editor(
-            df_port.style.map(color_pnl, subset=["P&L %", "Current Val (£)"]), 
+            # Added the .map() for color_outlook right here!
+            df_port.style.map(color_pnl, subset=["P&L %", "Current Val (£)"]).map(color_outlook, subset=["Day Outlook"] if "Day Outlook" in df_port.columns else []), 
             hide_index=True, 
             use_container_width=True,
             column_config={
@@ -923,7 +930,8 @@ with tab4:
                 "Current Val (£)": st.column_config.NumberColumn("Current Val (£)", format="£%.2f"),
                 "P&L %": st.column_config.NumberColumn("P&L %", format="%.2f%%")
             },
-            disabled=["Ticker", "Company", "Live Price", "Current Val (£)", "P&L %", "Signal", "Date"],
+            # Added "Day Outlook" to the disabled editing list
+            disabled=["Ticker", "Company", "Live Price", "Current Val (£)", "P&L %", "Signal", "Date", "Day Outlook"], 
             key="portfolio_editor"
         )
 
