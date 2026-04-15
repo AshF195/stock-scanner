@@ -335,14 +335,25 @@ def analyze_technical_metrics(df):
     # *NEW* RISK MANAGEMENT PENALTIES
     # ==========================================
     
-    # 1. Reversal Wick Penalty
+    # 1. Reversal Wicks (Tops and Bottoms)
     candle_range = t_h - t_l
     if candle_range > 0:
+        # A. The Trap (Shooting Star / Upper Wick)
         upper_wick = t_h - max(t_o, t_c)
-        wick_ratio = upper_wick / candle_range
-        if gap_pct > 0.04 and wick_ratio > 0.5:
+        upper_wick_ratio = upper_wick / candle_range
+        if gap_pct > 0.04 and upper_wick_ratio > 0.5:
             core_score -= 5
             receipt.append("**-5 pts**: Reversal Risk (Heavy selling pressure on Gap Up)")
+            
+        # B. The Bounce (Hammer / Lower Wick)
+        lower_wick = min(t_o, t_c) - t_l
+        lower_wick_ratio = lower_wick / candle_range
+        intraday_max_drop = (t_o - t_l) / t_o if t_o > 0 else 0
+        
+        # If it dropped >2% intraday, but buyers pushed it back up so the lower wick is >50% of the candle
+        if intraday_max_drop > 0.02 and lower_wick_ratio > 0.5:
+            core_score += 3
+            receipt.append("**+3 pts**: Bullish Reversal (Strong buying pressure off lows)")
 
     # 2. Overextension (Rubber Band) Penalty
     extension_pct = (t_c - sma_50) / sma_50 if sma_50 > 0 else 0
