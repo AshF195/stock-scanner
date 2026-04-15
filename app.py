@@ -271,9 +271,11 @@ def calculate_atr(high, low, close, period=14):
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
     tr3 = (low - close.shift(1)).abs()
-    # True Range is the maximum of the three
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    
+    # Ultra-lightweight memory method (avoids creating new DataFrames)
+    tr = tr1.combine(tr2, max).combine(tr3, max)
     atr = tr.rolling(period).mean()
+    
     return atr
 
 def calculate_macd(price_series):
