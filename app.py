@@ -884,6 +884,7 @@ with tab4:
                 "Date": data.get("Date Added", ""),
                 "Signal": live_signal,  # <-- Now pulls "🔥 PRIME BULL", etc.
                 "Company": company_name,
+                "Day Outlook": eod_outlook,
                 "Entry Price": entry_price,
                 "Live Price": live_price,
                 "Invested (£)": invested_amount,
