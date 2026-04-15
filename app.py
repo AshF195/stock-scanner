@@ -260,6 +260,27 @@ def fetch_stage2_data(ticker, company_name):
     # *NEW* Returning the new variables
     return articles, short_pct * 100, pe_ratio, profit_margin 
 
+def calculate_rsi(price_series, period=14):
+    delta = price_series.diff()
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_macd(price_series):
+    ema_12 = price_series.ewm(span=12, adjust=False).mean()
+    ema_26 = price_series.ewm(span=26, adjust=False).mean()
+    macd = ema_12 - ema_26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    hist = macd - signal
+    return macd, signal, hist
+
+def calculate_bollinger(price_series, window=20):
+    sma = price_series.rolling(window).mean()
+    std = price_series.rolling(window).std()
+    upper = sma + (std * 2)
+    lower = sma - (std * 2)
+    return upper, lower
 
 def analyze_technical_metrics(df):
     if df.empty or len(df) < 200: 
