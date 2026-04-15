@@ -244,45 +244,34 @@ def fetch_stage2_data(ticker, company_name):
         pass
 
     short_pct = 0.0
+    pe_ratio = 0.0 # *NEW* Variable for P/E Ratio
+    profit_margin = 0.0 # *NEW* Variable for Profit Margins
+    
     try:
         info = yf.Ticker(ticker).info
         short_pct = info.get('shortPercentOfFloat', 0) or 0.0
+        
+        # *NEW* Extract fundamental data since we already have the info dictionary
+        pe_ratio = info.get('trailingPE', 0) or 0.0
+        profit_margin = info.get('profitMargins', 0) or 0.0
     except:
         pass
         
-    return articles, short_pct * 100 
+    # *NEW* Returning the new variables
+    return articles, short_pct * 100, pe_ratio, profit_margin 
 
-def calculate_rsi(price_series, period=14):
-    delta = price_series.diff()
-    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
 
-def calculate_macd(price_series):
-    ema_12 = price_series.ewm(span=12, adjust=False).mean()
-    ema_26 = price_series.ewm(span=26, adjust=False).mean()
-    macd = ema_12 - ema_26
-    signal = macd.ewm(span=9, adjust=False).mean()
-    hist = macd - signal
-    return macd, signal, hist
-
-def calculate_bollinger(price_series, window=20):
-    sma = price_series.rolling(window).mean()
-    std = price_series.rolling(window).std()
-    upper = sma + (std * 2)
-    lower = sma - (std * 2)
-    return upper, lower
-
-# -----------------------------
-# MASTER ALGORITHM ENGINES
-# -----------------------------
 def analyze_technical_metrics(df):
     if df.empty or len(df) < 200: 
         return 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, []
     
     receipt = []
     c, o, v = df["Close"].squeeze(), df["Open"].squeeze(), df["Volume"].squeeze()
+    
+    # *NEW* Fetching High and Low for candlestick analysis
+    h, l = df["High"].squeeze(), df["Low"].squeeze()
+    t_h, t_l = float(h.iloc[-1]), float(l.iloc[-1])
+    
     y_c, t_o, t_v, t_c = float(c.iloc[-2]), float(o.iloc[-1]), float(v.iloc[-1]), float(c.iloc[-1])
     avg_v = float(v.iloc[-11:-1].mean())
     sma_50 = float(c.rolling(50).mean().iloc[-2])
@@ -320,6 +309,27 @@ def analyze_technical_metrics(df):
         receipt.append("**-2 pts**: Below 200 SMA Trend")
 
     core_score = gap_score + vol_score + trend_score
+
+    # ==========================================
+    # *NEW* RISK MANAGEMENT PENALTIES
+    # ==========================================
+    
+    # 1. Reversal Wick Penalty
+    candle_range = t_h - t_l
+    if candle_range > 0:
+        upper_wick = t_h - max(t_o, t_c)
+        wick_ratio = upper_wick / candle_range
+        if gap_pct > 0.04 and wick_ratio > 0.5:
+            core_score -= 5
+            receipt.append("**-5 pts**: Reversal Risk (Heavy selling pressure on Gap Up)")
+
+    # 2. Overextension (Rubber Band) Penalty
+    extension_pct = (t_c - sma_50) / sma_50 if sma_50 > 0 else 0
+    if extension_pct > 0.25:
+        core_score -= 3
+        receipt.append(f"**-3 pts**: Overextended ({extension_pct*100:.1f}% above 50 SMA)")
+        
+    # ==========================================
 
     macd_score = 0
     macd_status = "Neutral"
@@ -390,6 +400,7 @@ def analyze_technical_metrics(df):
 
     return core_score, osc_score, mom_score, sma_50, rsi, vol_spike, gap_pct, brk_status, macd_status, bb_status, receipt
 
+
 def process_ticker(ticker, company_name, p_min, v_min, min_yield_filter, last_price_memory):
     df = get_price_data(ticker)
     if df.empty or len(df) < 200: return None
@@ -418,7 +429,26 @@ def process_ticker(ticker, company_name, p_min, v_min, min_yield_filter, last_pr
     news = []
 
     if abs(core_score + osc_score) >= 4:
-        news, short_val = fetch_stage2_data(ticker, company_name)
+        # *NEW* Unpacking the new fundamental variables
+        news, short_val, pe_ratio, profit_margin = fetch_stage2_data(ticker, company_name)
+        
+        # ==========================================
+        # *NEW* FUNDAMENTAL SCORING LOGIC
+        # ==========================================
+        if pe_ratio > 0 and pe_ratio < 15:
+            cat_score += 2
+            receipt.append(f"**+2 pts**: Value Stock (P/E {pe_ratio:.1f})")
+        elif pe_ratio > 50:
+            cat_score -= 2
+            receipt.append(f"**-2 pts**: Overvalued (P/E {pe_ratio:.1f})")
+            
+        if profit_margin > 0.20:
+            cat_score += 2
+            receipt.append(f"**+2 pts**: High Profitability (>{profit_margin*100:.1f}% Margins)")
+        elif profit_margin < 0:
+            cat_score -= 2
+            receipt.append(f"**-2 pts**: Unprofitable Company")
+        # ==========================================
         
         if short_val > 10.0:
             if latest_close > sma_50: 
