@@ -425,7 +425,7 @@ def analyze_technical_metrics(df, df_intra=pd.DataFrame(), is_day_trade=False):
 def process_ticker(ticker, company_name, p_min, v_min, min_yield_filter, last_price_memory, is_day_trade=False):
     try:
         # Enforce stricter day trading liquidity filter (minimum 1M volume for day trades)
-        actual_v_min = 1000000 if is_day_trade and v_min < 1000000 else v_min
+        actual_v_min = v_min
         
         # Fetch data, passing the day trade flag to get 5m intraday data if needed
         df_daily, df_intra = get_price_data(ticker, fetch_intraday=is_day_trade)
