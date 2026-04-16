@@ -228,12 +228,21 @@ def get_price_data(ticker, fetch_intraday=False):
             df_intra = stock.history(period="1d", interval="5m")
 
         if df_daily.empty: return df_daily, df_intra
-        if isinstance(df_daily.columns, pd.MultiIndex): df_daily.columns = df_daily.columns.get_level_values(0)
+        
+        # Flatten YFinance MultiIndex for Daily Data
+        if isinstance(df_daily.columns, pd.MultiIndex): 
+            df_daily.columns = df_daily.columns.get_level_values(0)
         df_daily = df_daily.loc[:, ~df_daily.columns.duplicated()]
         
+        # Flatten YFinance MultiIndex for Intraday Data (The missing fix!)
+        if not df_intra.empty:
+            if isinstance(df_intra.columns, pd.MultiIndex):
+                df_intra.columns = df_intra.columns.get_level_values(0)
+            df_intra = df_intra.loc[:, ~df_intra.columns.duplicated()]
+            
         if not df_daily.empty and 'Close' in df_daily.columns and 'Open' in df_daily.columns: 
             return df_daily.dropna(subset=['Close', 'Open']), df_intra
-    except:
+    except Exception as e:
         pass
     return pd.DataFrame(), pd.DataFrame()
 
