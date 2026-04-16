@@ -80,11 +80,6 @@ finbert = load_finbert_model()
 # -----------------------------
 st.sidebar.title("🎛️ Control Panel")
 
-st.sidebar.markdown("### ⏱️ App Settings")
-day_trading_mode = st.sidebar.toggle("⚡ Day Trading Mode", value=False, help="Shifts focus to VWAP, 5m momentum, and explosive volume.")
-chart_preference = st.sidebar.radio("Preferred Chart:", ["Candlestick", "Line"], horizontal=True)
-# ... keep the rest of your refresh_interval code ...
-
 st.sidebar.markdown("### ⚙️ Scan Filters")
 min_price_option = st.sidebar.selectbox("Minimum Price:", ["No Filter", "> $1", "> $2", "> $5", "> $10", "> $20"])
 min_price = float(min_price_option.replace("> $", "").replace("No Filter", "0"))
@@ -112,6 +107,7 @@ if "Manual" in selected_markets:
 st.sidebar.divider()
 
 st.sidebar.markdown("### ⏱️ App Settings")
+day_trading_mode = st.sidebar.toggle("⚡ Day Trading Mode", value=False, help="Shifts focus to VWAP, 5m momentum, and explosive volume.")
 chart_preference = st.sidebar.radio("Preferred Chart:", ["Candlestick", "Line"], horizontal=True)
 refresh_interval = st.sidebar.selectbox("Auto-Refresh:", ["Off", "1 min", "5 mins", "10 mins", "15 mins", "30 mins"])
 auto_run_scan = st.sidebar.toggle("Auto-Run Scan on Refresh", value=False)
