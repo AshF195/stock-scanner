@@ -439,24 +439,110 @@ def process_ticker(ticker, company_name, p_min, v_min, min_yield_filter, last_pr
         avg_vol = float(df_daily["Volume"].squeeze().iloc[-11:-1].mean())
         if latest_close < p_min or avg_vol < v_min: return None
 
+        # Dividend Yield Filter
+        try:
+            if 'Dividends' in df_daily.columns:
+                annual_dividend = float(df_daily['Dividends'].sum())
+                yield_pct = (annual_dividend / latest_close) * 100 if latest_close > 0 else 0.0
+            else: yield_pct = 0.0
+        except: yield_pct = 0.0
+            
+        if min_yield_filter > 0 and yield_pct < min_yield_filter: return None
+
+        if last_price_memory == 0.0: last_price_memory = latest_close
+
         # Unpack the 13 variables from analysis
-        core, osc, mom, sma50, rsi, vol, gap, brk, macd_st, bb_st, receipt, eod, intra = analyze_technical_metrics(df_daily, df_intra, is_day_trade)
+        core_score, osc_score, mom_score, sma_50, rsi, vol, gap, brk, macd_st, bb_st, receipt, eod_outlook, intra_score = analyze_technical_metrics(df_daily, df_intra, is_day_trade)
         
-        # Add fundamental logic back in here
-        cat_score = mom + intra 
-        # (Add your Stage 2 News/Short Interest fetching here as per your original code)
-        
-        total_score = core + osc + cat_score
+        cat_score = mom_score + intra_score 
+        short_val = 0.0
+        sent_label = "Neutral"
+        upc = "None"
+        news = []
+
+        # --- STAGE 2: FUNDAMENTALS & NEWS ---
+        if abs(core_score + osc_score) >= 4:
+            news, short_val, pe_ratio, profit_margin = fetch_stage2_data(ticker, company_name)
+            
+            # Fundamental Scoring
+            if pe_ratio > 0 and pe_ratio < 15:
+                cat_score += 2
+                receipt.append(f"**+2 pts**: Value Stock (P/E {pe_ratio:.1f})")
+            elif pe_ratio > 50:
+                cat_score -= 2
+                receipt.append(f"**-2 pts**: Overvalued (P/E {pe_ratio:.1f})")
+                
+            if profit_margin > 0.20:
+                cat_score += 2
+                receipt.append(f"**+2 pts**: High Profitability (>{profit_margin*100:.1f}% Margins)")
+            elif profit_margin < 0:
+                cat_score -= 2
+                receipt.append(f"**-2 pts**: Unprofitable Company")
+            
+            # Short Squeeze Scoring
+            if short_val > 10.0:
+                if latest_close > sma_50: 
+                    cat_score += 4
+                    receipt.append(f"**+4 pts**: Squeeze Setup (>10% Short + Above 50 SMA)")
+                elif latest_close < sma_50: 
+                    cat_score -= 4
+                    receipt.append(f"**-4 pts**: Short Breakdown (>10% Short + Below 50 SMA)")
+
+            # AI Sentiment Scoring
+            if news and 'finbert' in globals():
+                pos_c, neg_c = 0, 0
+                for a in news:
+                    try:
+                        res = finbert(a["title"])[0]
+                        if res['label'] == 'positive': pos_c += 1
+                        elif res['label'] == 'negative': neg_c += 1
+                    except: pass
+                
+                sent_s = 3 if pos_c > neg_c else -3 if neg_c > pos_c else 0
+                sent_label = "Positive" if sent_s > 0 else "Negative" if sent_s < 0 else "Neutral"
+                cat_score += sent_s
+                if sent_s != 0: receipt.append(f"**{'+' if sent_s > 0 else ''}{sent_s} pts**: AI News Sentiment ({sent_label})")
+
+                now = datetime.now(timezone.utc)
+                for a in news:
+                    t, d = a["title"].lower(), (now - a["published"]).days if a["published"] else 10
+                    if any(k in t for k in ["results","earnings","update"]) and d <= 5: 
+                        bonus = 2 if sent_s >= 0 else -2
+                        cat_score += bonus
+                        receipt.append(f"**{'+' if bonus > 0 else ''}{bonus} pts**: Recent Earnings/Update Catalyst")
+                        break
+                        
+                    if any(e in t for e in ["results", "earnings"]) and any(f in t for f in ["upcoming", "expected", "tomorrow"]): 
+                        upc = "Upcoming Event"
+
+        # Final Total Score
+        total_score = core_score + osc_score + cat_score
         
         # Select Label based on Mode
         if is_day_trade:
-            label = "🔥 PRIME DAY-TRADE" if total_score >= 32 else "🟢 MOMENTUM" if total_score >= 20 else "⚪ CHOP"
+            if total_score >= 32: label = "🔥 PRIME DAY-TRADE"
+            elif total_score >= 20: label = "🟢 MOMENTUM LONG"
+            elif total_score >= 12:  label = "🟡 WATCH LONG"
+            elif total_score <= -32: label = "🩸 PRIME SHORT"
+            elif total_score <= -20: label = "🔴 MOMENTUM SHORT"
+            else: label = "⚪ CHOP (AVOID)"
         else:
-            label = "🔥 PRIME BULL" if total_score >= 25 else "🟢 SWING BULL" if total_score >= 15 else "⚪ NEUTRAL"
+            if total_score >= 25: label = "🔥 PRIME BULL"
+            elif total_score >= 15: label = "🟢 SWING BULL"
+            elif total_score >= 8:  label = "🟡 TREND BULL"
+            elif total_score <= -25: label = "🩸 PRIME BEAR"
+            elif total_score <= -15: label = "🔴 SWING BEAR"
+            elif total_score <= -8:  label = "🟠 TREND BEAR"
+            else: label = "⚪ NEUTRAL"
 
         return {
-            "Signal": label, "Ticker": ticker, "Score": total_score, "Receipt": receipt, "Day Outlook": eod,
-            "Price": latest_close, "RSI": rsi, "MACD": macd_st, "B-Bands": bb_st
+            "Signal": label, "Ticker": ticker, "Company": company_name, "Day Outlook": eod_outlook, "Total Score": total_score,
+            "Core Tech Score": core_score, "Oscillator Score": osc_score, "Catalyst Score": cat_score,
+            "Price ($)": latest_close, "Gap %": gap * 100, "Vol Spike (x)": vol, "RSI": rsi, 
+            "Short Int %": short_val, "Yield %": yield_pct, "MACD Status": macd_st, "BB Status": bb_st,
+            "Breakout": brk, "AI Sentiment": sent_label, "Upcoming Event": upc,
+            "Score Receipt": receipt,
+            "Headlines": [n["title"] for n in news] if news else ["Skipped AI: Insufficient technical movement"]
         }
     except Exception as e:
         return None
