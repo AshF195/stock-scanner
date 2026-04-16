@@ -749,11 +749,11 @@ with tab1:
                     st.markdown("### Latest News")
                     for h in row["Headlines"][:4]: st.markdown(f"- {h}")
                 with c2:
-            # Unpack the two returned dataframes, but we only need the daily one (df_chart) for this chart
-            df_chart, df_intra = get_price_data(row['Ticker'])
+                    # Unpack the two returned dataframes, but we only need the daily one (df_chart) for this chart
+                    df_chart, df_intra = get_price_data(row['Ticker'])
             
-            if not df_chart.empty:
-                st.plotly_chart(generate_mini_chart(df_chart, row['Ticker'], row['Company'], chart_preference), use_container_width=True)
+                    if not df_chart.empty:
+                        st.plotly_chart(generate_mini_chart(df_chart, row['Ticker'], row['Company'], chart_preference), use_container_width=True)
 
 # ==========================================
 # TAB 2 & 3: GLOBAL SENTIMENT & YAHOO MOVERS 
