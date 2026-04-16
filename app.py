@@ -12,13 +12,14 @@ import io
 import re
 import json
 import os
-import numpy as np
+import requests
 
 # Safely import autorefresh & transformers
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:
     st.error("Please run: pip install streamlit-autorefresh")
+
 try:
     from transformers import pipeline
     FINBERT_AVAILABLE = True
@@ -33,6 +34,7 @@ st.set_page_config(page_title="Stock Market Tracker", layout="wide", initial_sid
 # -----------------------------
 if "last_prices" not in st.session_state:
     st.session_state.last_prices = {}
+
 if "scan_results" not in st.session_state:
     st.session_state.scan_results = None
 
@@ -55,8 +57,13 @@ def load_diary():
             return json.load(f)
     return []
 
+def save_diary(diary_list):
+    with open(DIARY_FILE, "w") as f:
+        json.dump(diary_list, f)
+
 if "portfolio" not in st.session_state:
     st.session_state.portfolio = load_portfolio()
+
 if "diary" not in st.session_state:
     st.session_state.diary = load_diary()
 
@@ -69,39 +76,170 @@ def load_finbert_model():
 finbert = load_finbert_model()
 
 # -----------------------------
-# ADX CALCULATION (for tiered trend strength)
+# UI SIDEBAR
 # -----------------------------
-def calculate_adx(high, low, close, period=14):
-    tr1 = high - low
-    tr2 = (high - close.shift(1)).abs()
-    tr3 = (low - close.shift(1)).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
+st.sidebar.title("🎛️ Control Panel")
 
-    plus_dm = (high - high.shift(1)).where((high - high.shift(1) > low.shift(1) - low), 0)
-    minus_dm = (low.shift(1) - low).where((low.shift(1) - low > high - high.shift(1)), 0)
+st.sidebar.markdown("### ⏱️ App Settings")
+day_trading_mode = st.sidebar.toggle("⚡ Day Trading Mode", value=False, help="Shifts focus to VWAP, 5m momentum, and explosive volume.")
+chart_preference = st.sidebar.radio("Preferred Chart:", ["Candlestick", "Line"], horizontal=True)
+# ... keep the rest of your refresh_interval code ...
 
-    plus_di = 100 * (plus_dm.ewm(alpha=1/period, adjust=False).mean() / atr)
-    minus_di = 100 * (minus_dm.ewm(alpha=1/period, adjust=False).mean() / atr)
+st.sidebar.markdown("### ⚙️ Scan Filters")
+min_price_option = st.sidebar.selectbox("Minimum Price:", ["No Filter", "> $1", "> $2", "> $5", "> $10", "> $20"])
+min_price = float(min_price_option.replace("> $", "").replace("No Filter", "0"))
 
-    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
-    adx = dx.rolling(period).mean()
-    return adx, plus_di, minus_di
+min_vol_option = st.sidebar.selectbox("Minimum Daily Volume:", ["No Filter", "> 100k", "> 500k", "> 1M"])
+vol_map = {"No Filter": 0, "> 100k": 100000, "> 500k": 500000, "> 1M": 1000000}
+min_vol = vol_map[min_vol_option]
+
+min_yield = st.sidebar.slider("Minimum Dividend Yield (%)", 0.0, 10.0, 0.0, step=0.5)
+
+st.sidebar.divider()
+
+st.sidebar.markdown("### 🌍 Target Markets")
+options = [
+    "Manual", "FTSE 100 (UK)", "FTSE 250 (UK)", "FTSE SmallCap (UK)", "DAX 40 (Germany)", "CAC 40 (France)", 
+    "IBEX 35 (Spain)", "WIG 20 (Poland)", "FTSE MIB (Italy)", "Euronext (Netherlands)", "S&P 500 (US)", 
+    "S&P 400 MidCap (US)", "S&P 600 SmallCap (US)", "Nasdaq 100 (US)"
+]
+selected_markets = st.sidebar.multiselect("Select Indices:", options, default=["FTSE 100 (UK)"])
+
+ticker_input = ""
+if "Manual" in selected_markets:
+    ticker_input = st.sidebar.text_area("Manual Tickers (comma separated):", "AAPL, MSFT")
+
+st.sidebar.divider()
+
+st.sidebar.markdown("### ⏱️ App Settings")
+chart_preference = st.sidebar.radio("Preferred Chart:", ["Candlestick", "Line"], horizontal=True)
+refresh_interval = st.sidebar.selectbox("Auto-Refresh:", ["Off", "1 min", "5 mins", "10 mins", "15 mins", "30 mins"])
+auto_run_scan = st.sidebar.toggle("Auto-Run Scan on Refresh", value=False)
+color_coding = st.sidebar.toggle("Color Code Dataframe", value=True)
+
+if refresh_interval != "Off":
+    interval_map = {"1 min": 60, "5 mins": 300, "10 mins": 600, "15 mins": 900, "30 mins": 1800}
+    st_autorefresh(interval=interval_map[refresh_interval] * 1000, key="data_refresh")
+    st.sidebar.success(f"Auto-refresh active: {refresh_interval}")
+
+if st.sidebar.button("🔄 Clear Cache & Restart"):
+    st.cache_data.clear()
+    st.session_state.last_prices = {}
+    st.session_state.scan_results = None
+    st.rerun()
 
 # -----------------------------
-# INDICATORS
+# DYNAMIC INDEX SCRAPER
+# -----------------------------
+@st.cache_data(ttl=86400)
+def get_index_constituents(index_name):
+    # 1. Local File Scraper for WIG 20
+    if index_name == "WIG 20 (Poland)":
+        if os.path.exists("wig20.txt"):
+            valid_pairs = []
+            with open("wig20.txt", "r", encoding="utf-8") as f:
+                for line in f:
+                    if ',' in line:
+                        ticker, name = line.strip().split(',', 1)
+                        valid_pairs.append((ticker.strip(), name.strip()))
+            if valid_pairs: return valid_pairs
+        return [("AAPL", "Apple - Missing wig20.txt")]
+        
+    # 2. Local File Scraper for FTSE SmallCap
+    if index_name == "FTSE SmallCap (UK)":
+        if os.path.exists("ftse_smallcap.txt"):
+            valid_pairs = []
+            with open("ftse_smallcap.txt", "r", encoding="utf-8") as f:
+                for line in f:
+                    if ',' in line:
+                        ticker, name = line.strip().split(',', 1)
+                        valid_pairs.append((ticker.strip(), name.strip()))
+            if valid_pairs: return valid_pairs
+        return [("AAPL", "Apple - Missing ftse_smallcap.txt")]
+
+    # 2.5 Local File Scraper for FTSE SmallCap
+    if index_name == "Euronext (Netherlands)":
+        if os.path.exists("euronext.txt"):
+            valid_pairs = []
+            with open("euronext.txt", "r", encoding="utf-8") as f:
+                for line in f:
+                    if ',' in line:
+                        ticker, name = line.strip().split(',', 1)
+                        valid_pairs.append((ticker.strip(), name.strip()))
+            if valid_pairs: return valid_pairs
+        return [("AAPL", "Apple - Missing euronext.txt")]
+    
+
+    # 3. Standard Wikipedia Scraper for remaining indices
+    index_map = {
+        "FTSE 100 (UK)": ('https://en.wikipedia.org/wiki/FTSE_100_Index', '.L'),
+        "FTSE 250 (UK)": ('https://en.wikipedia.org/wiki/FTSE_250_Index', '.L'),
+        "DAX 40 (Germany)": ('https://en.wikipedia.org/wiki/DAX', '.DE'),
+        "CAC 40 (France)": ('https://en.wikipedia.org/wiki/CAC_40', '.PA'),
+        "IBEX 35 (Spain)": ('https://en.wikipedia.org/wiki/IBEX_35', '.MC'),
+        "FTSE MIB (Italy)": ('https://en.wikipedia.org/wiki/FTSE_MIB', '.MI'),
+        "S&P 500 (US)": ('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies', ''),
+        "S&P 400 MidCap (US)": ('https://en.wikipedia.org/wiki/List_of_S%26P_400_companies', ''),
+        "S&P 600 SmallCap (US)": ('https://en.wikipedia.org/wiki/List_of_S%26P_600_companies', ''),
+        "Nasdaq 100 (US)": ('https://en.wikipedia.org/wiki/Nasdaq-100', '')
+    }
+    
+    url, suffix = index_map.get(index_name, ('', ''))
+    if not url: return [("AAPL", "Apple")]
+
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        html = urllib.request.urlopen(req, timeout=10).read()
+        tables = pd.read_html(io.StringIO(html.decode('utf-8')))
+        
+        for table in tables:
+            if isinstance(table.columns, pd.MultiIndex): table.columns = table.columns.get_level_values(0)
+            
+            ticker_col = next((col for col in table.columns if any(x in str(col).lower() for x in ['ticker', 'symbol', 'code', 'epic'])), None)
+            
+            if ticker_col and len(table) > 10:
+                raw_tickers = table[ticker_col].astype(str).str.strip()
+                raw_tickers = raw_tickers.apply(lambda x: re.sub(r'[^A-Za-z0-9.-]', '', x))
+                
+                name_col = next((col for col in table.columns if any(x in str(col).lower() for x in ['company', 'security', 'name'])), None)
+                names = table[name_col].astype(str) if name_col else raw_tickers
+                
+                valid_pairs = []
+                for t, n in zip(raw_tickers, names):
+                    if not t or t.lower() == 'nan': continue
+                    if suffix == '.L': t = t.replace('.', '-')
+                    if suffix and not t.endswith(suffix): t = f"{t}{suffix}"
+                    valid_pairs.append((t, n))
+                    
+                if valid_pairs: return valid_pairs
+    except Exception:
+        pass
+        
+    return [("AAPL", "Apple")]
+
+# -----------------------------
+# INDICATORS & FETCHING
 # -----------------------------
 @st.cache_data(ttl=60)
-def get_price_data(ticker):
+def get_price_data(ticker, fetch_intraday=False):
     try:
         stock = yf.Ticker(ticker)
-        df = stock.history(period="1y")
-        if df.empty: return df
-        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-        df = df.loc[:, ~df.columns.duplicated()]
-        return df.dropna(subset=['Close', 'Open'])
+        df_daily = stock.history(period="1y")
+        
+        df_intra = pd.DataFrame()
+        if fetch_intraday:
+            # Fetch 1 day of 5-minute candles for VWAP and ORB
+            df_intra = stock.history(period="1d", interval="5m")
+
+        if df_daily.empty: return df_daily, df_intra
+        if isinstance(df_daily.columns, pd.MultiIndex): df_daily.columns = df_daily.columns.get_level_values(0)
+        df_daily = df_daily.loc[:, ~df_daily.columns.duplicated()]
+        
+        if not df_daily.empty and 'Close' in df_daily.columns and 'Open' in df_daily.columns: 
+            return df_daily.dropna(subset=['Close', 'Open']), df_intra
     except:
-        return pd.DataFrame()
+        pass
+    return pd.DataFrame(), pd.DataFrame()
 
 @st.cache_data(ttl=300)
 def fetch_stage2_data(ticker, company_name):
@@ -116,17 +254,23 @@ def fetch_stage2_data(ticker, company_name):
             articles.append({"title": item.find('title').text, "published": parsedate_to_datetime(item.find('pubDate').text)})
     except:
         pass
+
     short_pct = 0.0
-    pe_ratio = 0.0
-    profit_margin = 0.0
+    pe_ratio = 0.0 # *NEW* Variable for P/E Ratio
+    profit_margin = 0.0 # *NEW* Variable for Profit Margins
+    
     try:
         info = yf.Ticker(ticker).info
         short_pct = info.get('shortPercentOfFloat', 0) or 0.0
+        
+        # *NEW* Extract fundamental data since we already have the info dictionary
         pe_ratio = info.get('trailingPE', 0) or 0.0
         profit_margin = info.get('profitMargins', 0) or 0.0
     except:
         pass
-    return articles, short_pct * 100, pe_ratio, profit_margin
+        
+    # *NEW* Returning the new variables
+    return articles, short_pct * 100, pe_ratio, profit_margin 
 
 def calculate_rsi(price_series, period=14):
     delta = price_series.diff()
@@ -139,8 +283,11 @@ def calculate_atr(high, low, close, period=14):
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
     tr3 = (low - close.shift(1)).abs()
+    
+    # Ultra-lightweight memory method (avoids creating new DataFrames)
     tr = tr1.combine(tr2, max).combine(tr3, max)
     atr = tr.rolling(period).mean()
+    
     return atr
 
 def calculate_macd(price_series):
@@ -158,315 +305,255 @@ def calculate_bollinger(price_series, window=20):
     lower = sma - (std * 2)
     return upper, lower
 
-# -----------------------------
-# TIERED SCORING ENGINE (Core 15 + Oscillator 10 + Catalyst 15)
-# AI Sentiment now capped at max 3 points
-# -----------------------------
-def analyze_technical_metrics(df):
-    if df.empty or len(df) < 200:
-        return 0, 0, 0, 0, 0, 0, 0.0, 0.0, "None", "Neutral", "Inside", [], "N/A"
-
-    c = df["Close"].squeeze()
-    o = df["Open"].squeeze()
-    v = df["Volume"].squeeze()
-    h = df["High"].squeeze()
-    l = df["Low"].squeeze()
-
-    t_c = float(c.iloc[-1])
-    t_o = float(o.iloc[-1])
-    t_h = float(h.iloc[-1])
-    t_l = float(l.iloc[-1])
-    y_c = float(c.iloc[-2])
-    avg_v = float(v.iloc[-11:-1].mean()) if len(v) > 10 else 1.0
-    vol_spike = float(v.iloc[-1]) / avg_v if float(v.iloc[-1]) > 0 and avg_v > 0 else 1.0
-
-    sma_50 = float(c.rolling(50).mean().iloc[-1])
-    sma_200 = float(c.rolling(200).mean().iloc[-1])
-    rsi = calculate_rsi(c).iloc[-1]
-
+def analyze_technical_metrics(df, df_intra=pd.DataFrame(), is_day_trade=False):
+    if df.empty or len(df) < 200: 
+        return 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, [], "N/A"
+    
     receipt = []
+    c, o, v = df["Close"].squeeze(), df["Open"].squeeze(), df["Volume"].squeeze()
+    h, l = df["High"].squeeze(), df["Low"].squeeze()
+    
+    t_h, t_l = float(h.iloc[-1]), float(l.iloc[-1])
+    y_c, t_o, t_v, t_c = float(c.iloc[-2]), float(o.iloc[-1]), float(v.iloc[-1]), float(c.iloc[-1])
+    avg_v = float(v.iloc[-11:-1].mean())
+    vol_spike = t_v / avg_v if avg_v > 0 else 1.0 
+    
+    sma_50 = float(c.rolling(50).mean().iloc[-2])
+    sma_200 = float(c.rolling(200).mean().iloc[-2])
 
-    # ==================== CORE TECH SCORE (Max 15) ====================
-    core_score = 0
-
-    # Price vs SMAs - tiered
-    if t_c > sma_200:
-        core_score += 5
-        receipt.append("**+5 pts**: Above 200 SMA")
-    elif t_c > sma_200 * 0.97:
-        core_score += 2
-        receipt.append("+2 pts: Near 200 SMA")
-
-    if t_c > sma_50:
-        core_score += 5
-        receipt.append("**+5 pts**: Above 50 SMA")
-    elif t_c > sma_50 * 0.98:
-        core_score += 2
-        receipt.append("+2 pts: Near 50 SMA")
-
-    if sma_50 > sma_200:
-        core_score += 3
-        receipt.append("**+3 pts**: Golden Cross (50 > 200)")
-    elif sma_50 > sma_200 * 0.99:
-        core_score += 1
-        receipt.append("+1 pt: Near Golden Cross")
-
-    # ADX Trend Strength - tiered
-    adx, _, _ = calculate_adx(h, l, c)
-    current_adx = float(adx.iloc[-1])
-    if current_adx > 30:
-        core_score += 2
-        receipt.append(f"**+2 pts**: Strong Trend (ADX {current_adx:.1f})")
-    elif current_adx > 22:
-        core_score += 1
-        receipt.append(f"+1 pt: Moderate Trend (ADX {current_adx:.1f})")
-
-    # ==================== OSCILLATOR SCORE (Max 10) ====================
-    osc_score = 0
-
-    # RSI - tiered for trending markets
-    if rsi < 30:
-        osc_score += 5
-        receipt.append(f"**+5 pts**: RSI Deep Oversold ({rsi:.1f})")
-    elif rsi < 40:
-        osc_score += 3
-        receipt.append(f"+3 pts: RSI Oversold ({rsi:.1f})")
-    elif rsi < 50:
-        osc_score += 1
-        receipt.append(f"+1 pt: RSI Cooling ({rsi:.1f})")
-    elif rsi > 75:
-        osc_score -= 5
-        receipt.append(f"**-5 pts**: RSI Extreme Overbought ({rsi:.1f})")
-    elif rsi > 68:
-        osc_score -= 3
-        receipt.append(f"-3 pts: RSI Overbought ({rsi:.1f})")
-    elif rsi > 60:
-        osc_score -= 1
-        receipt.append(f"-1 pt: RSI Heating Up ({rsi:.1f})")
-    else:
-        osc_score += 1
-        receipt.append(f"+1 pt: RSI Balanced ({rsi:.1f})")
-
-    # MACD
+    rsi = calculate_rsi(c).iloc[-1]
     macd_line, macd_signal, macd_hist = calculate_macd(c)
-    macd_status = "Neutral"
-    if macd_line.iloc[-1] > macd_signal.iloc[-1] and macd_line.iloc[-2] <= macd_signal.iloc[-2]:
-        osc_score += 3
-        macd_status = "Bull Cross"
-        receipt.append("**+3 pts**: MACD Bullish Cross")
-    if macd_hist.iloc[-1] > macd_hist.iloc[-2] > 0:
-        osc_score += 2
-        receipt.append("+2 pts: MACD Histogram Expanding")
+    bb_upper, bb_lower = calculate_bollinger(c)
 
-    # ==================== CATALYST SCORE (Max 15) ====================
-    cat_score = 0
-
-    # Volume - tiered (stronger confirmation)
-    if vol_spike >= 5.0:
-        cat_score += 10
-        receipt.append(f"**+10 pts**: Massive Volume Spike ({vol_spike:.1f}x)")
-    elif vol_spike >= 3.0:
-        cat_score += 7
-        receipt.append(f"**+7 pts**: Strong Volume Spike ({vol_spike:.1f}x)")
-    elif vol_spike >= 2.0:
-        cat_score += 4
-        receipt.append(f"+4 pts: Solid Volume Increase ({vol_spike:.1f}x)")
-    elif vol_spike >= 1.5:
-        cat_score += 2
-        receipt.append(f"+2 pts: Volume Increase ({vol_spike:.1f}x)")
-
-    # Intraday Fuel (unchanged)
+    # --- ATR DAILY GAS TANK ---
     try:
-        atr_14 = calculate_atr(h, l, c).iloc[-1]
+        atr_14 = calculate_atr(df["High"], df["Low"], df["Close"]).iloc[-1]
         today_range = t_h - t_l
         atr_exhaustion = (today_range / atr_14) * 100 if atr_14 > 0 else 0
-        if atr_exhaustion > 110:
-            eod_outlook = f"Peaked ({atr_exhaustion:.0f}%)"
-        elif atr_exhaustion > 85:
-            eod_outlook = f"Exhausting ({atr_exhaustion:.0f}%)"
-        elif atr_exhaustion < 50 and vol_spike > 2.0:
-            eod_outlook = f"Early ({atr_exhaustion:.0f}%)"
-        else:
-            eod_outlook = f"Normal ({atr_exhaustion:.0f}%)"
+        if atr_exhaustion > 110: eod_outlook = f"Peaked ({atr_exhaustion:.0f}%)"
+        elif atr_exhaustion > 85: eod_outlook = f"Exhausting ({atr_exhaustion:.0f}%)"
+        elif atr_exhaustion < 50 and vol_spike > 2.0: eod_outlook = f"Early ({atr_exhaustion:.0f}%)"
+        else: eod_outlook = f"Normal ({atr_exhaustion:.0f}%)"
+        receipt.append(f"**Intraday Fuel**: {eod_outlook} of typical daily move used")
     except:
         eod_outlook = "N/A"
 
+    # --- TIERED GAP SCORING ---
     gap_pct = (t_o - y_c) / y_c if y_c > 0 else 0
+    gap_score = 0
+    if gap_pct > 0.12: gap_score = 7
+    elif gap_pct > 0.08: gap_score = 5
+    elif gap_pct > 0.05: gap_score = 3
+    elif gap_pct > 0.02: gap_score = 1
+    elif gap_pct < -0.12: gap_score = -7
+    elif gap_pct < -0.08: gap_score = -5
+    elif gap_pct < -0.05: gap_score = -3
+    elif gap_pct < -0.02: gap_score = -1
+    if gap_score != 0: receipt.append(f"**{'+' if gap_score > 0 else ''}{gap_score} pts**: Tiered Gap ({gap_pct*100:.2f}%)")
 
-    return (
-        core_score, osc_score, cat_score, core_score + osc_score + cat_score,
-        sma_50, rsi, vol_spike, gap_pct,
-        macd_status, "Inside Bands", receipt, eod_outlook, "Neutral"
-    )
+    # --- TIERED VOLUME SCORING ---
+    vol_base = 0
+    if vol_spike > 5.0: vol_base = 8
+    elif vol_spike > 3.0: vol_base = 5
+    elif vol_spike > 1.5: vol_base = 2
+    vol_score = vol_base if gap_pct >= 0 else -vol_base
+    if vol_score != 0: receipt.append(f"**{'+' if vol_score > 0 else ''}{vol_score} pts**: Tiered Volume ({vol_spike:.1f}x)")
 
-# -----------------------------
-# MAIN PROCESSING
-# -----------------------------
-def process_ticker(ticker, company_name, p_min, v_min, min_yield_filter, last_price_memory):
-    df = get_price_data(ticker)
-    if df.empty or len(df) < 200: return None
+    # --- TREND SCORING ---
+    trend_score = 0
+    brk_status = "None"
+    if y_c < sma_50 and t_o > sma_50:
+        trend_score += 3; brk_status = "Bull 50"
+        receipt.append("**+3 pts**: Bullish 50 SMA Breakout")
+    elif y_c > sma_50 and t_o < sma_50:
+        trend_score -= 3; brk_status = "Bear 50"
+        receipt.append("**-3 pts**: Bearish 50 SMA Breakdown")
+    
+    if t_c > sma_200: trend_score += 2; receipt.append("**+2 pts**: Above 200 SMA Trend")
+    else: trend_score -= 2; receipt.append("**-2 pts**: Below 200 SMA Trend")
 
-    latest_close = float(df["Close"].squeeze().iloc[-1])
-    avg_vol = float(df["Volume"].squeeze().iloc[-11:-1].mean())
-    if latest_close < p_min or avg_vol < v_min: return None
+    # --- TIERED RSI SCORING ---
+    rsi_score = 0
+    if rsi < 20: rsi_score = 4; receipt.append(f"**+4 pts**: Extreme Oversold ({rsi:.1f})")
+    elif rsi < 30: rsi_score = 2; receipt.append(f"**+2 pts**: Oversold ({rsi:.1f})")
+    elif rsi < 40: rsi_score = 1; receipt.append(f"**+1 pt**: Cooling ({rsi:.1f})")
+    elif rsi > 80: rsi_score = -4; receipt.append(f"**-4 pts**: Extreme Overbought ({rsi:.1f})")
+    elif rsi > 70: rsi_score = -2; receipt.append(f"**-2 pts**: Overbought ({rsi:.1f})")
+    elif rsi > 60: rsi_score = -1; receipt.append(f"**-1 pt**: Heating Up ({rsi:.1f})")
 
+    # Day Trading Logic Overrides
+    intra_score = 0
+    if is_day_trade:
+        trend_score = int(trend_score * 0.5) # De-weight long-term averages for day trading
+        
+        if not df_intra.empty:
+            typical_price = (df_intra['High'] + df_intra['Low'] + df_intra['Close']) / 3
+            vwap = (typical_price * df_intra['Volume']).cumsum() / df_intra['Volume'].cumsum()
+            c_price = df_intra['Close'].iloc[-1]
+            c_vwap = vwap.iloc[-1]
+            
+            # VWAP Positioning
+            if c_price > c_vwap * 1.01:
+                intra_score += 6
+                receipt.append("**+6 pts**: Surging above Intraday VWAP")
+            elif c_price > c_vwap:
+                intra_score += 3
+                receipt.append("**+3 pts**: Holding above Intraday VWAP")
+            else:
+                intra_score -= 5
+                receipt.append("**-5 pts**: Rejected/Below Intraday VWAP")
+
+            # Opening Range Breakout (first 30 mins = 6 periods)
+            if len(df_intra) >= 6:
+                orb_high = df_intra['High'].iloc[0:6].max()
+                if c_price > orb_high:
+                    intra_score += 5
+                    receipt.append("**+5 pts**: 30-min Opening Range Breakout (UP)")
+
+    # Baseline core score assembly (keeping other indicators intact)
+    core_score = gap_score + vol_score + trend_score
+    osc_score = rsi_score + macd_score + bb_score
+    
+    return core_score, osc_score, 0, sma_50, rsi, vol_spike, gap_pct, brk_status, "Neutral", "Inside", receipt, eod_outlook, intra_score
+
+
+def process_ticker(ticker, company_name, p_min, v_min, min_yield_filter, last_price_memory, is_day_trade=False):
     try:
-        if 'Dividends' in df.columns:
-            annual_dividend = float(df['Dividends'].sum())
-            yield_pct = (annual_dividend / latest_close) * 100 if latest_close > 0 else 0.0
+        # Enforce stricter day trading liquidity filter (minimum 1M volume for day trades)
+        actual_v_min = 1000000 if is_day_trade and v_min < 1000000 else v_min
+        
+        # Fetch data, passing the day trade flag to get 5m intraday data if needed
+        df_daily, df_intra = get_price_data(ticker, fetch_intraday=is_day_trade)
+        if df_daily.empty or len(df_daily) < 200: 
+            return None
+        
+        latest_close = float(df_daily["Close"].squeeze().iloc[-1])
+        avg_vol = float(df_daily["Volume"].squeeze().iloc[-11:-1].mean())
+        
+        # Initial Price and Volume Filters
+        if latest_close < p_min or avg_vol < actual_v_min: 
+            return None
+
+        # Fetch basic info for Dividend Yield filtering
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        div_yield = info.get("dividendYield", 0)
+        div_yield_pct = (div_yield * 100) if div_yield else 0.0
+        if min_yield_filter > 0 and div_yield_pct < min_yield_filter:
+            return None
+
+        # Unpack technical metrics (including our new intra_score)
+        core_score, osc_score, mom_score, sma_50, rsi, vol, gap, brk, macd_st, bb_st, receipt, eod_outlook, intra_score = analyze_technical_metrics(df_daily, df_intra, is_day_trade)
+        
+        # Inject intraday momentum directly into Catalyst/Momentum score
+        cat_score = mom_score + intra_score 
+        
+        # Combine for total score
+        total_score = core_score + osc_score + cat_score
+        
+        # Adjust threshold labels depending on the active mode
+        if is_day_trade:
+            if total_score >= 32: label = "🔥 PRIME DAY-TRADE"
+            elif total_score >= 20: label = "🟢 MOMENTUM LONG"
+            elif total_score >= 12:  label = "🟡 WATCH LONG"
+            elif total_score <= -32: label = "🩸 PRIME SHORT"
+            elif total_score <= -20: label = "🔴 MOMENTUM SHORT"
+            else: label = "⚪ CHOP (AVOID)"
         else:
-            yield_pct = 0.0
-    except:
-        yield_pct = 0.0
+            if total_score >= 25: label = "🔥 PRIME BULL"
+            elif total_score >= 15: label = "🟢 SWING BULL"
+            elif total_score >= 8:  label = "🟡 TREND BULL"
+            elif total_score <= -25: label = "🩸 PRIME BEAR"
+            elif total_score <= -15: label = "🔴 SWING BEAR"
+            elif total_score <= -8:  label = "🟠 TREND BEAR"
+            else: label = "⚪ NEUTRAL"
 
-    if min_yield_filter > 0 and yield_pct < min_yield_filter: return None
-    if last_price_memory == 0.0: last_price_memory = latest_close
+        # Calculate live price change using memory state
+        price_change_str = ""
+        if last_price_memory > 0:
+            change_pct = ((latest_close - last_price_memory) / last_price_memory) * 100
+            if change_pct > 0: price_change_str = f" (+{change_pct:.2f}%)"
+            elif change_pct < 0: price_change_str = f" ({change_pct:.2f}%)"
 
-    # Call tiered scoring
-    (core_score, osc_score, cat_score, total_score,
-     sma_50, rsi, vol_spike, gap_pct, macd_st, bb_st,
-     receipt, eod_outlook, sent_label) = analyze_technical_metrics(df)
+        # Construct and return the final data dictionary
+        return {
+            "Ticker": ticker,
+            "Company": company_name,
+            "Price": f"£{latest_close:.2f}{price_change_str}",
+            "Score": total_score,
+            "Signal": label,
+            "RSI": f"{rsi:.1f}",
+            "Vol Spike": f"{vol:.1f}x",
+            "Gap %": f"{gap*100:.2f}%",
+            "Breakout": brk,
+            "MACD": macd_st,
+            "B-Bands": bb_st,
+            "Receipt": receipt,
+            "EOD Outlook": eod_outlook,
+            "Div Yield": f"{div_yield_pct:.2f}%" if div_yield_pct > 0 else "N/A",
+            "Raw Price": latest_close
+        }
+        
+    except Exception as e:
+        # Failsafe so a single ticker error doesn't crash the whole scan
+        return None
 
-    # === CATALYST BOOSTS (fundamentals, short squeeze, AI sentiment) ===
-    news = []
-    short_val = 0.0
-    pe_ratio = 0.0
-    profit_margin = 0.0
-    upc = "None"
-
-    if abs(core_score + osc_score) >= 4:  # Only run expensive calls on decent setups
-        news, short_val, pe_ratio, profit_margin = fetch_stage2_data(ticker, company_name)
-
-        # Fundamentals (small bonuses)
-        if pe_ratio > 0 and pe_ratio < 15:
-            cat_score += 2
-            receipt.append(f"+2 pts: Value Stock (P/E {pe_ratio:.1f})")
-        elif pe_ratio > 50:
-            cat_score -= 2
-            receipt.append(f"-2 pts: Overvalued (P/E {pe_ratio:.1f})")
-
-        if profit_margin > 0.20:
-            cat_score += 2
-            receipt.append(f"+2 pts: High Profitability ({profit_margin*100:.1f}% margins)")
-
-        # Short Squeeze
-        if short_val > 10.0:
-            if latest_close > sma_50:
-                cat_score += 3
-                receipt.append("+3 pts: Short Squeeze Setup (>10% short + above 50 SMA)")
-            else:
-                cat_score -= 3
-                receipt.append("-3 pts: Short Pressure")
-
-        # AI Sentiment - NOW CAPPED AT MAX 3 PTS
-        if news and finbert:
-            pos_c, neg_c = 0, 0
-            for a in news:
-                try:
-                    res = finbert(a["title"])[0]
-                    if res['label'] == 'positive': pos_c += 1
-                    elif res['label'] == 'negative': neg_c += 1
-                except:
-                    pass
-
-            if pos_c > neg_c + 1:
-                sent_s = 3
-                sent_label = "Positive"
-            elif pos_c > neg_c:
-                sent_s = 2
-                sent_label = "Positive"
-            elif neg_c > pos_c + 1:
-                sent_s = -3
-                sent_label = "Negative"
-            elif neg_c > pos_c:
-                sent_s = -2
-                sent_label = "Negative"
-            else:
-                sent_s = 0
-                sent_label = "Neutral"
-
-            cat_score += sent_s
-            if sent_s != 0:
-                receipt.append(f"**{'+' if sent_s > 0 else ''}{sent_s} pts**: AI Sentiment ({sent_label})")
-
-            # Recent catalyst bonus
-            now = datetime.now(timezone.utc)
-            for a in news:
-                t, d = a["title"].lower(), (now - a["published"]).days if a["published"] else 10
-                if any(k in t for k in ["results","earnings","update"]) and d <= 5:
-                    bonus = 2 if sent_s >= 0 else -2
-                    cat_score += bonus
-                    receipt.append(f"**{'+' if bonus > 0 else ''}{bonus} pts**: Recent Earnings Catalyst")
-                    break
-
-    # Final total with all boosts
-    total_score = core_score + osc_score + cat_score
-
-    # Rating labels (adjusted for new tiered max ~40)
-    if total_score >= 28: label = "🔥 PRIME BULL"
-    elif total_score >= 20: label = "🟢 SWING BULL"
-    elif total_score >= 12: label = "🟡 TREND BULL"
-    elif total_score <= -28: label = "🩸 PRIME BEAR"
-    elif total_score <= -20: label = "🔴 SWING BEAR"
-    elif total_score <= -12: label = "🟠 TREND BEAR"
-    else: label = "⚪ NEUTRAL"
-
-    return {
-        "Signal": label, "Ticker": ticker, "Company": company_name, "Day Outlook": eod_outlook,
-        "Total Score": total_score,
-        "Core Tech Score": core_score, "Oscillator Score": osc_score, "Catalyst Score": cat_score,
-        "Price ($)": latest_close, "Gap %": gap_pct * 100, "Vol Spike (x)": vol_spike, "RSI": rsi,
-        "Short Int %": short_val, "Yield %": yield_pct, "MACD Status": macd_st, "BB Status": bb_st,
-        "Breakout": "None", "AI Sentiment": sent_label, "Upcoming Event": upc,
-        "Score Receipt": receipt,
-        "Headlines": [n["title"] for n in news] if news else ["Skipped AI: Insufficient technical movement"]
-    }
+def generate_mini_chart(df, ticker, company_name, chart_type):
+    df_chart = df.tail(30)
+    fig = go.Figure()
+    if chart_type == "Candlestick": fig.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'].squeeze(), high=df_chart['High'].squeeze(), low=df_chart['Low'].squeeze(), close=df_chart['Close'].squeeze()))
+    else: fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Close'].squeeze(), mode='lines', line=dict(color='#00ff88', width=2)))
+    fig.update_layout(title=f"{company_name} ({ticker})", margin=dict(l=0, r=0, t=30, b=0), height=300, xaxis_rangeslider_visible=False, template="plotly_dark")
+    return fig
 
 # -----------------------------
 # SAFE DATAFRAME STYLING
 # -----------------------------
 def apply_dataframe_styling(df, active):
     if not active: return df
-   
+    
     def color_gen(val):
         if isinstance(val, (int, float)):
             if val > 0: return 'color: #00FF00'
             elif val < 0: return 'color: #FF4B4B'
         return ''
-       
+        
     def color_rsi(val):
         if pd.isna(val): return ''
         if val < 30: return 'color: #00FF00; font-weight: bold'
         elif val > 70: return 'color: #FF4B4B; font-weight: bold'
         return ''
+
     def color_outlook(val):
         if pd.isna(val) or not isinstance(val, str): return ''
-        if "Peaked" in val: return 'color: #FF4B4B; font-weight: bold'
-        elif "Exhausting" in val: return 'color: #FFA500; font-weight: bold'
-        elif "Early" in val: return 'color: #00FF00; font-weight: bold'
-        elif "Normal" in val: return 'color: #888888'
+        if "Peaked" in val: return 'color: #FF4B4B; font-weight: bold'       # Red
+        elif "Exhausting" in val: return 'color: #FFA500; font-weight: bold'   # Orange
+        elif "Early" in val: return 'color: #00FF00; font-weight: bold'        # Green
+        elif "Normal" in val: return 'color: #888888'                          # Grey
         return ''
-       
+        
     def color_vol(val):
         if pd.isna(val): return ''
         if val >= 1.5: return 'color: #00FF00'
         elif val <= 0.5: return 'color: #FF4B4B'
         return ''
+
     target_gen_cols = ["Gap %", "Total Score", "Core Tech Score", "Oscillator Score", "Catalyst Score"]
     existing_gen_cols = [col for col in target_gen_cols if col in df.columns]
-   
+    
     styler = df.style
     if existing_gen_cols:
         styler = styler.map(color_gen, subset=existing_gen_cols)
-       
+        
     if "RSI" in df.columns:
         styler = styler.map(color_rsi, subset=["RSI"])
-       
+        
     if "Vol Spike (x)" in df.columns:
         styler = styler.map(color_vol, subset=["Vol Spike (x)"])
+
     if "Day Outlook" in df.columns:
         styler = styler.map(color_outlook, subset=["Day Outlook"])
-       
+        
     return styler
 
 col_config_settings = {
@@ -477,149 +564,19 @@ col_config_settings = {
     "Price ($)": st.column_config.NumberColumn(format="%.2f"),
     "Gap %": st.column_config.NumberColumn(format="%.2f"),
     "Vol Spike (x)": st.column_config.NumberColumn(format="%.2f"),
-    "RSI": st.column_config.NumberColumn(format="%.1f"),
+    "RSI": st.column_config.NumberColumn(format="%.1f"), 
     "Short Int %": st.column_config.NumberColumn(format="%.1f"),
     "Yield %": st.column_config.NumberColumn(format="%.2f")
 }
+
 display_cols_main = ["Track", "Signal", "Ticker", "Company", "Day Outlook", "Total Score", "Core Tech Score", "Oscillator Score", "Catalyst Score", "Price ($)", "Gap %", "Yield %"]
 display_cols_detailed = ["Vol Spike (x)", "RSI", "MACD Status", "BB Status", "Short Int %", "Breakout", "AI Sentiment", "Upcoming Event"]
-
-# -----------------------------
-# DYNAMIC INDEX SCRAPER
-# -----------------------------
-@st.cache_data(ttl=86400)
-def get_index_constituents(index_name):
-    if index_name == "WIG 20 (Poland)":
-        if os.path.exists("wig20.txt"):
-            valid_pairs = []
-            with open("wig20.txt", "r", encoding="utf-8") as f:
-                for line in f:
-                    if ',' in line:
-                        ticker, name = line.strip().split(',', 1)
-                        valid_pairs.append((ticker.strip(), name.strip()))
-            if valid_pairs: return valid_pairs
-        return [("AAPL", "Apple - Missing wig20.txt")]
-       
-    if index_name == "FTSE SmallCap (UK)":
-        if os.path.exists("ftse_smallcap.txt"):
-            valid_pairs = []
-            with open("ftse_smallcap.txt", "r", encoding="utf-8") as f:
-                for line in f:
-                    if ',' in line:
-                        ticker, name = line.strip().split(',', 1)
-                        valid_pairs.append((ticker.strip(), name.strip()))
-            if valid_pairs: return valid_pairs
-        return [("AAPL", "Apple - Missing ftse_smallcap.txt")]
-   
-    if index_name == "Euronext (Netherlands)":
-        if os.path.exists("euronext.txt"):
-            valid_pairs = []
-            with open("euronext.txt", "r", encoding="utf-8") as f:
-                for line in f:
-                    if ',' in line:
-                        ticker, name = line.strip().split(',', 1)
-                        valid_pairs.append((ticker.strip(), name.strip()))
-            if valid_pairs: return valid_pairs
-        return [("AAPL", "Apple - Missing euronext.txt")]
-   
-    index_map = {
-        "FTSE 100 (UK)": ('https://en.wikipedia.org/wiki/FTSE_100_Index', '.L'),
-        "FTSE 250 (UK)": ('https://en.wikipedia.org/wiki/FTSE_250_Index', '.L'),
-        "DAX 40 (Germany)": ('https://en.wikipedia.org/wiki/DAX', '.DE'),
-        "CAC 40 (France)": ('https://en.wikipedia.org/wiki/CAC_40', '.PA'),
-        "IBEX 35 (Spain)": ('https://en.wikipedia.org/wiki/IBEX_35', '.MC'),
-        "FTSE MIB (Italy)": ('https://en.wikipedia.org/wiki/FTSE_MIB', '.MI'),
-        "S&P 500 (US)": ('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies', ''),
-        "S&P 400 MidCap (US)": ('https://en.wikipedia.org/wiki/List_of_S%26P_400_companies', ''),
-        "S&P 600 SmallCap (US)": ('https://en.wikipedia.org/wiki/List_of_S%26P_600_companies', ''),
-        "Nasdaq 100 (US)": ('https://en.wikipedia.org/wiki/Nasdaq-100', '')
-    }
-   
-    url, suffix = index_map.get(index_name, ('', ''))
-    if not url: return [("AAPL", "Apple")]
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        html = urllib.request.urlopen(req, timeout=10).read()
-        tables = pd.read_html(io.StringIO(html.decode('utf-8')))
-       
-        for table in tables:
-            if isinstance(table.columns, pd.MultiIndex): table.columns = table.columns.get_level_values(0)
-           
-            ticker_col = next((col for col in table.columns if any(x in str(col).lower() for x in ['ticker', 'symbol', 'code', 'epic'])), None)
-           
-            if ticker_col and len(table) > 10:
-                raw_tickers = table[ticker_col].astype(str).str.strip()
-                raw_tickers = raw_tickers.apply(lambda x: re.sub(r'[^A-Za-z0-9.-]', '', x))
-               
-                name_col = next((col for col in table.columns if any(x in str(col).lower() for x in ['company', 'security', 'name'])), None)
-                names = table[name_col].astype(str) if name_col else raw_tickers
-               
-                valid_pairs = []
-                for t, n in zip(raw_tickers, names):
-                    if not t or t.lower() == 'nan': continue
-                    if suffix == '.L': t = t.replace('.', '-')
-                    if suffix and not t.endswith(suffix): t = f"{t}{suffix}"
-                    valid_pairs.append((t, n))
-                   
-                if valid_pairs: return valid_pairs
-    except Exception:
-        pass
-       
-    return [("AAPL", "Apple")]
-
-def generate_mini_chart(df, ticker, company_name, chart_type):
-    df_chart = df.tail(30)
-    fig = go.Figure()
-    if chart_type == "Candlestick": 
-        fig.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'].squeeze(), high=df_chart['High'].squeeze(), low=df_chart['Low'].squeeze(), close=df_chart['Close'].squeeze()))
-    else: 
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Close'].squeeze(), mode='lines', line=dict(color='#00ff88', width=2)))
-    fig.update_layout(title=f"{company_name} ({ticker})", margin=dict(l=0, r=0, t=30, b=0), height=300, xaxis_rangeslider_visible=False, template="plotly_dark")
-    return fig
-
-# -----------------------------
-# UI SIDEBAR
-# -----------------------------
-st.sidebar.title("🎛️ Control Panel")
-st.sidebar.markdown("### ⚙️ Scan Filters")
-min_price_option = st.sidebar.selectbox("Minimum Price:", ["No Filter", "> $1", "> $2", "> $5", "> $10", "> $20"])
-min_price = float(min_price_option.replace("> $", "").replace("No Filter", "0"))
-min_vol_option = st.sidebar.selectbox("Minimum Daily Volume:", ["No Filter", "> 100k", "> 500k", "> 1M"])
-vol_map = {"No Filter": 0, "> 100k": 100000, "> 500k": 500000, "> 1M": 1000000}
-min_vol = vol_map[min_vol_option]
-min_yield = st.sidebar.slider("Minimum Dividend Yield (%)", 0.0, 10.0, 0.0, step=0.5)
-st.sidebar.divider()
-st.sidebar.markdown("### 🌍 Target Markets")
-options = [
-    "Manual", "FTSE 100 (UK)", "FTSE 250 (UK)", "FTSE SmallCap (UK)", "DAX 40 (Germany)", "CAC 40 (France)",
-    "IBEX 35 (Spain)", "WIG 20 (Poland)", "FTSE MIB (Italy)", "Euronext (Netherlands)", "S&P 500 (US)",
-    "S&P 400 MidCap (US)", "S&P 600 SmallCap (US)", "Nasdaq 100 (US)"
-]
-selected_markets = st.sidebar.multiselect("Select Indices:", options, default=["FTSE 100 (UK)"])
-ticker_input = ""
-if "Manual" in selected_markets:
-    ticker_input = st.sidebar.text_area("Manual Tickers (comma separated):", "AAPL, MSFT")
-st.sidebar.divider()
-st.sidebar.markdown("### ⏱️ App Settings")
-chart_preference = st.sidebar.radio("Preferred Chart:", ["Candlestick", "Line"], horizontal=True)
-refresh_interval = st.sidebar.selectbox("Auto-Refresh:", ["Off", "1 min", "5 mins", "10 mins", "15 mins", "30 mins"])
-auto_run_scan = st.sidebar.toggle("Auto-Run Scan on Refresh", value=False)
-color_coding = st.sidebar.toggle("Color Code Dataframe", value=True)
-if refresh_interval != "Off":
-    interval_map = {"1 min": 60, "5 mins": 300, "10 mins": 600, "15 mins": 900, "30 mins": 1800}
-    st_autorefresh(interval=interval_map[refresh_interval] * 1000, key="data_refresh")
-    st.sidebar.success(f"Auto-refresh active: {refresh_interval}")
-if st.sidebar.button("🔄 Clear Cache & Restart"):
-    st.cache_data.clear()
-    st.session_state.last_prices = {}
-    st.session_state.scan_results = None
-    st.rerun()
 
 # -----------------------------
 # MAIN APP BUILDER
 # -----------------------------
 st.title("🌍 Stock Market Tracker")
-st.markdown("**Tiered 40-Point Master Algorithm** | AI Sentiment now max 3 pts | Smoother & more accurate scoring")
+st.markdown("40-Point Master Algorithm | Regime Filtering | Double-Edged Short Squeeze Engine")
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎯 Live Deep Scanner", "📰 Global Sentiment", "📈 Yahoo Movers", "💼 Paper Portfolio", "📓 My Diary"])
 
@@ -637,28 +594,29 @@ with tab1:
     col1, col2 = st.columns([3, 1])
     with col1: st.write(f"Ready to scan **{len(final_target_list)}** unique stocks.")
     with col2: run_scan = st.button("🚀 Run Deep Scan", type="primary", use_container_width=True)
+
     if (run_scan or auto_run_scan) and len(final_target_list) > 0:
         results, progress_bar, status_text = [], st.progress(0), st.empty()
-       
+        
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {executor.submit(process_ticker, t[0], t[1], min_price, min_vol, min_yield, st.session_state.last_prices.get(t[0], 0.0)): t[0] for t in final_target_list}
+            futures = {executor.submit(process_ticker, t[0], t[1], min_price, min_vol, min_yield, st.session_state.last_prices.get(t[0], 0.0), day_trading_mode): t[0] for t in final_target_list}
             for i, future in enumerate(concurrent.futures.as_completed(futures)):
                 ticker = futures[future]
                 try:
-                    res = future.result(timeout=15)
-                    if res:
+                    res = future.result(timeout=15) 
+                    if res: 
                         st.session_state.last_prices[res["Ticker"]] = res["Price ($)"]
                         results.append(res)
                 except concurrent.futures.TimeoutError:
                     st.toast(f"⚠️ Skipped {ticker} (Yahoo Finance timed out)")
-                except Exception as e:
-                    st.write(f"Error on {ticker}: {e}")
+                except Exception as e: 
+                    st.write(f"Error on {ticker}: {e}") # <-- This will print the exact bug to your screen
                 progress_bar.progress((i + 1) / len(final_target_list))
                 status_text.text(f"Processed {i+1} / {len(final_target_list)}...")
-               
+                
         status_text.empty()
         progress_bar.empty()
-       
+        
         if results:
             df_results = pd.DataFrame(results)
             df_results = df_results.drop_duplicates(subset=['Ticker'])
@@ -668,21 +626,22 @@ with tab1:
         else:
             st.session_state.scan_results = pd.DataFrame()
             st.warning("No stocks passed your minimum price, volume, and yield filters.")
+
     if st.session_state.scan_results is not None and not st.session_state.scan_results.empty:
         df_results = st.session_state.scan_results.copy()
-       
+        
         p_bull = len(df_results[df_results['Signal'] == "🔥 PRIME BULL"])
         s_bull = len(df_results[df_results['Signal'] == "🟢 SWING BULL"])
         t_bull = len(df_results[df_results['Signal'] == "🟡 TREND BULL"])
-       
+        
         mc1, mc2, mc3, mc4 = st.columns(4)
         mc1.metric("Total Passing Filters", len(df_results))
         mc2.metric("🔥 PRIME BULLS", p_bull)
         mc3.metric("🟢 SWING BULLS", s_bull)
         mc4.metric("🟡 TREND BULLS", t_bull)
-       
+        
         df_results.insert(0, 'Track', df_results['Ticker'].apply(lambda t: t in st.session_state.portfolio))
-       
+        
         edited_df = st.data_editor(
             apply_dataframe_styling(df_results[display_cols_main], color_coding),
             use_container_width=True,
@@ -694,13 +653,13 @@ with tab1:
             disabled=[col for col in display_cols_main if col != "Track"],
             key="main_table_editor"
         )
-       
+        
         portfolio_changed = False
         for _, row in edited_df.iterrows():
             ticker = row['Ticker']
             is_tracked = row['Track']
             was_tracked = ticker in st.session_state.portfolio
-           
+            
             if is_tracked and not was_tracked:
                 st.session_state.portfolio[ticker] = {
                     "Company": row['Company'],
@@ -713,18 +672,19 @@ with tab1:
             elif not is_tracked and was_tracked:
                 del st.session_state.portfolio[ticker]
                 portfolio_changed = True
-               
+                
         if portfolio_changed:
             save_portfolio(st.session_state.portfolio)
-       
+        
         st.divider()
         st.subheader("📰 Deep Dive: Actionable Setups")
-       
+        
         for index, row in df_results[df_results["Total Score"].abs() >= 8].iterrows():
             with st.expander(f"{row['Signal']} | {row['Company']} ({row['Ticker']}) - Score: {row['Total Score']}"):
-               
+                
                 df_single = pd.DataFrame([row])[display_cols_detailed]
                 st.dataframe(apply_dataframe_styling(df_single, color_coding), hide_index=True, use_container_width=True, column_config=col_config_settings)
+
                 st.markdown("##### 🧮 Score Receipt (Transparency Engine)")
                 c_rec1, c_rec2 = st.columns(2)
                 half_list = len(row["Score Receipt"]) // 2 + 1
@@ -732,8 +692,9 @@ with tab1:
                     for item in row["Score Receipt"][:half_list]: st.markdown(f"- {item}")
                 with c_rec2:
                     for item in row["Score Receipt"][half_list:]: st.markdown(f"- {item}")
-               
+                
                 st.divider()
+
                 c1, c2 = st.columns([1, 1.5])
                 with c1:
                     st.markdown("### Latest News")
@@ -743,13 +704,14 @@ with tab1:
                         st.plotly_chart(generate_mini_chart(df_chart, row['Ticker'], row['Company'], chart_preference), use_container_width=True)
 
 # ==========================================
-# TAB 2 & 3: GLOBAL SENTIMENT & YAHOO MOVERS
+# TAB 2 & 3: GLOBAL SENTIMENT & YAHOO MOVERS 
 # ==========================================
 with tab2:
     st.subheader("📰 Global FinBERT Sentiment")
     st.write("Processing top global headlines...")
     if st.button("🔄 Generate Report") and FINBERT_AVAILABLE:
         st.info("Run scan to trigger sentiment mapping pipeline.")
+
 with tab3:
     st.subheader("📈 Analyze Yahoo Finance Top Movers")
     mover_category = st.selectbox("Select Category:", ["gainers", "losers", "active"])
@@ -761,20 +723,22 @@ with tab3:
 # ==========================================
 with tab4:
     st.subheader("💼 Active Paper Trades & Watchlist")
-   
+    
     if not st.session_state.portfolio:
         st.info("Your portfolio is empty. Check the 'Track' box in the Live Deep Scanner table to add a stock here.")
     else:
+        # --- 1. INTERCEPT EDITS BEFORE RENDERING THE UI ---
         if "portfolio_editor" in st.session_state:
             edits = st.session_state["portfolio_editor"].get("edited_rows", {})
             if edits and "port_row_map" in st.session_state:
                 port_changed = False
                 for row_idx_str, changes in edits.items():
                     row_idx = int(row_idx_str)
+                    # Match the row you edited to the correct Ticker symbol
                     if row_idx < len(st.session_state.port_row_map):
                         ticker = st.session_state.port_row_map[row_idx]
                         port_item = st.session_state.portfolio[ticker]
-                       
+                        
                         if "Status" in changes:
                             port_item["Status"] = changes["Status"]
                             port_changed = True
@@ -784,88 +748,113 @@ with tab4:
                         if "Invested (£)" in changes:
                             port_item["Amount"] = float(changes["Invested (£)"])
                             port_changed = True
-                           
+                            
+                # Lock it directly into your JSON file
                 if port_changed:
-                    with open("portfolio.json", "w") as f:
-                        json.dump(st.session_state.portfolio, f)
+                    import json
+                    try:
+                        with open("portfolio.json", "w") as f:
+                            json.dump(st.session_state.portfolio, f)
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+        # --------------------------------------------------
+
+        # 2. Clean up old data structures seamlessly
         for tick, data in st.session_state.portfolio.items():
             if "Status" not in data: data["Status"] = "Watching"
             if "Amount" not in data: data["Amount"] = 0.0
             if "Entry Price" not in data: data["Entry Price"] = 0.0
+
         port_row_map = []
         portfolio_data = []
         total_invested = 0.0
         current_value = 0.0
-       
+        
+     # 3. Build the live dataframe
         for tick, data in st.session_state.portfolio.items():
-            port_row_map.append(tick)
-           
+            port_row_map.append(tick) # Map the row index for the editor interceptor
+            
             company_name = data.get("Company", tick)
-           
+            
             try:
-                result = process_ticker(tick, company_name, p_min=0, v_min=0, min_yield_filter=0, last_price_memory=0.0)
-               
+                # Call your master function directly! 
+                # We pass 0 for all filters so we don't accidentally hide stocks you own
+                result = process_ticker(tick, company_name, p_min=0, v_min=0, min_yield_filter=0, last_price_memory=0.0, is_day_trade=False)
+                
                 if result is not None:
                     live_signal = result["Signal"]
                     live_price = float(result["Price ($)"])
-                    live_outlook = result.get("Day Outlook", "N/A")
+                    # NEW: Pull the Day Outlook safely from the result dictionary
+                    live_outlook = result.get("Day Outlook", "N/A") 
                 else:
+                    # Failsafe if the stock has < 200 days of data
                     live_price = float(data.get('Entry Price', 0.0))
                     live_signal = "⚪ NEUTRAL (No Data)"
-                    live_outlook = "N/A"
-                   
+                    # NEW: Failsafe string
+                    live_outlook = "N/A" 
+                    
             except Exception as e:
                 live_price = float(data.get('Entry Price', 0.0))
                 live_signal = "Error"
-                live_outlook = "Error"
-               
+                # NEW: Error string
+                live_outlook = "Error" 
+                
             entry_price = float(data.get('Entry Price', 0.0))
             pnl_pct = ((live_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
             invested_amount = float(data.get('Amount', 0.0))
-           
+            
+            # Calculate live values only if you actually own it
             if data["Status"] == "Owned":
                 current_pos_val = invested_amount * (1 + (pnl_pct / 100))
                 total_invested += invested_amount
                 current_value += current_pos_val
             else:
                 current_pos_val = 0.0
-           
+            
             portfolio_data.append({
                 "Ticker": tick,
                 "Status": data["Status"],
                 "Date": data.get("Date Added", ""),
                 "Signal": live_signal,
                 "Company": company_name,
-                "Day Outlook": live_outlook,
+                "Day Outlook": live_outlook, # <-- Pulling the fixed variable here!
                 "Entry Price": entry_price,
                 "Live Price": live_price,
                 "Invested (£)": invested_amount,
                 "Current Val (£)": current_pos_val,
                 "P&L %": pnl_pct
             })
-           
-        st.session_state["port_row_map"] = port_row_map
-       
+            
+        # --- CONVERT TO DATAFRAME & DEFINE COLORS ---
+        
+        # Save the row map to session state so the editor interceptor works perfectly
+        st.session_state["port_row_map"] = port_row_map 
+        
+        # Convert list to a Pandas DataFrame
         df_port = pd.DataFrame(portfolio_data)
-       
+        
+        # Define the coloring functions for the portfolio table
         def color_pnl(val):
             if isinstance(val, (int, float)):
                 if val > 0:
-                    return 'color: #00FF00'
+                    return 'color: #00FF00'  # Bright green
                 elif val < 0:
-                    return 'color: #FF4B4B'
+                    return 'color: #FF4B4B'  # Streamlit red
             return ''
+
         def color_outlook_port(val):
             if pd.isna(val) or not isinstance(val, str): return ''
-            if "Peaked" in val: return 'color: #FF4B4B; font-weight: bold'
-            elif "Exhausting" in val: return 'color: #FFA500; font-weight: bold'
-            elif "Early" in val: return 'color: #00FF00; font-weight: bold'
-            elif "Normal" in val: return 'color: #888888'
+            if "Peaked" in val: return 'color: #FF4B4B; font-weight: bold'       # Red
+            elif "Exhausting" in val: return 'color: #FFA500; font-weight: bold'   # Orange
+            elif "Early" in val: return 'color: #00FF00; font-weight: bold'        # Green
+            elif "Normal" in val: return 'color: #888888'                          # Grey
             return ''
-           
+        # --------------------------------------------
+            
+        # 4. Render the interactive table
         st.data_editor(
-            df_port.style.map(color_pnl, subset=["P&L %", "Current Val (£)"]).map(color_outlook_port, subset=["Day Outlook"] if "Day Outlook" in df_port.columns else []),
-            hide_index=True,
+            df_port.style.map(color_pnl, subset=["P&L %", "Current Val (£)"]).map(color_outlook_port, subset=["Day Outlook"] if "Day Outlook" in df_port.columns else []), 
+            hide_index=True, 
             use_container_width=True,
             column_config={
                 "Status": st.column_config.SelectboxColumn("Status", options=["Watching", "Owned"], required=True),
@@ -875,7 +864,7 @@ with tab4:
                 "Current Val (£)": st.column_config.NumberColumn("Current Val (£)", format="£%.2f"),
                 "P&L %": st.column_config.NumberColumn("P&L %", format="%.2f%%")
             },
-            disabled=["Ticker", "Company", "Live Price", "Current Val (£)", "P&L %", "Signal", "Date", "Day Outlook"],
+            disabled=["Ticker", "Company", "Live Price", "Current Val (£)", "P&L %", "Signal", "Date", "Day Outlook"], 
             key="portfolio_editor"
         )
 
@@ -884,9 +873,9 @@ with tab4:
 # ==========================================
 with tab5:
     st.subheader("📓 My Trading Diary")
-   
+    
     c_diary1, c_diary2 = st.columns([1, 2.5])
-   
+    
     with c_diary1:
         st.markdown("##### Log a Closed Trade")
         with st.form("diary_form", clear_on_submit=True):
@@ -894,16 +883,16 @@ with tab5:
             d_ticker = st.text_input("Ticker (e.g., AAPL, MTRO.L)").upper()
             d_pnl = st.number_input("Realized Profit/Loss (£)", value=0.0, step=10.0)
             d_notes = st.text_input("Notes (Optional)")
-           
+            
             submitted = st.form_submit_button("💾 Save to Diary")
-           
+            
             if submitted and d_ticker:
                 with st.spinner("Fetching company details..."):
                     try:
                         c_name = yf.Ticker(d_ticker).info.get('shortName', d_ticker)
                     except:
                         c_name = d_ticker
-                       
+                        
                     entry = {
                         "Date": str(d_date),
                         "Ticker": d_ticker,
@@ -914,46 +903,49 @@ with tab5:
                     st.session_state.diary.append(entry)
                     save_diary(st.session_state.diary)
                     st.rerun()
+
     with c_diary2:
         st.markdown("##### Performance Graph")
         if st.session_state.diary:
             df_diary = pd.DataFrame(st.session_state.diary)
-           
+            
             df_grouped = df_diary.groupby("Date")["P&L (£)"].sum().reset_index()
             df_grouped = df_grouped.sort_values("Date")
             df_grouped["Cumulative P&L (£)"] = df_grouped["P&L (£)"].cumsum()
-           
+            
             fig = go.Figure()
             fig.add_trace(go.Bar(
-                x=df_grouped["Date"],
-                y=df_grouped["P&L (£)"],
-                name='Daily P&L',
+                x=df_grouped["Date"], 
+                y=df_grouped["P&L (£)"], 
+                name='Daily P&L', 
                 marker_color=df_grouped['P&L (£)'].apply(lambda x: '#00FF00' if x >= 0 else '#FF4B4B')
             ))
             fig.add_trace(go.Scatter(
-                x=df_grouped["Date"],
-                y=df_grouped["Cumulative P&L (£)"],
-                mode='lines+markers',
-                name='Cumulative Growth',
+                x=df_grouped["Date"], 
+                y=df_grouped["Cumulative P&L (£)"], 
+                mode='lines+markers', 
+                name='Cumulative Growth', 
                 line=dict(color='#00BFFF', width=3)
             ))
-           
+            
             fig.update_layout(template="plotly_dark", margin=dict(l=0, r=0, t=30, b=0), height=350, hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Log your first trade to generate your performance graph!")
+
     st.divider()
     st.markdown("##### Trade History")
-   
+    
     if st.session_state.diary:
         df_hist = pd.DataFrame(st.session_state.diary)
         df_hist.insert(0, "Delete", False)
-       
+        
         def color_diary_pnl(val):
             if isinstance(val, (int, float)):
                 if val > 0: return 'color: #00FF00'
                 elif val < 0: return 'color: #FF4B4B'
             return ''
+
         edited_hist = st.data_editor(
             df_hist.style.map(color_diary_pnl, subset=["P&L (£)"]),
             hide_index=True,
@@ -965,7 +957,7 @@ with tab5:
             disabled=["Date", "Ticker", "Company", "P&L (£)", "Notes"],
             key="diary_editor"
         )
-       
+        
         if edited_hist["Delete"].any():
             keep_indices = edited_hist[~edited_hist["Delete"]].index.tolist()
             st.session_state.diary = [st.session_state.diary[i] for i in keep_indices]
