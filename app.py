@@ -107,7 +107,6 @@ if "Manual" in selected_markets:
 st.sidebar.divider()
 
 st.sidebar.markdown("### ⏱️ App Settings")
-day_trading_mode = st.sidebar.toggle("⚡ Day Trading Mode", value=False, help="Shifts focus to VWAP, 5m momentum, and explosive volume.")
 chart_preference = st.sidebar.radio("Preferred Chart:", ["Candlestick", "Line"], horizontal=True)
 refresh_interval = st.sidebar.selectbox("Auto-Refresh:", ["Off", "1 min", "5 mins", "10 mins", "15 mins", "30 mins"])
 auto_run_scan = st.sidebar.toggle("Auto-Run Scan on Refresh", value=False)
@@ -217,36 +216,18 @@ def get_index_constituents(index_name):
 # INDICATORS & FETCHING
 # -----------------------------
 @st.cache_data(ttl=60) 
-def get_price_data(ticker, fetch_intraday=False):
+def get_price_data(ticker):
     try:
         stock = yf.Ticker(ticker)
-        df_daily = stock.history(period="1y")
-        
-        df_intra = pd.DataFrame()
-        if fetch_intraday:
-            # Fetch 1 day of 5-minute candles for Day Trade mode
-            df_intra = stock.history(period="1d", interval="5m")
-
-        if df_daily.empty: 
-            return df_daily, df_intra
-        
-        # Clean Daily Data
-        if isinstance(df_daily.columns, pd.MultiIndex): 
-            df_daily.columns = df_daily.columns.get_level_values(0)
-        df_daily = df_daily.loc[:, ~df_daily.columns.duplicated()]
-        
-        # Clean Intraday Data
-        if not df_intra.empty:
-            if isinstance(df_intra.columns, pd.MultiIndex):
-                df_intra.columns = df_intra.columns.get_level_values(0)
-            df_intra = df_intra.loc[:, ~df_intra.columns.duplicated()]
-            
-        if not df_daily.empty and 'Close' in df_daily.columns: 
-            return df_daily.dropna(subset=['Close']), df_intra
-            
-    except Exception:
+        df = stock.history(period="1y")
+        if df.empty: return df
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+        df = df.loc[:, ~df.columns.duplicated()]
+        if not df.empty and 'Close' in df.columns and 'Open' in df.columns: 
+            return df.dropna(subset=['Close', 'Open'])
+    except:
         pass
-    return pd.DataFrame(), pd.DataFrame()
+    return pd.DataFrame()
 
 @st.cache_data(ttl=300)
 def fetch_stage2_data(ticker, company_name):
@@ -312,19 +293,22 @@ def calculate_bollinger(price_series, window=20):
     lower = sma - (std * 2)
     return upper, lower
 
-def analyze_technical_metrics(df, df_intra=pd.DataFrame(), is_day_trade=False):
-    # Ensure we return 13 items to match the unpacking in process_ticker
+def analyze_technical_metrics(df):
+    # *CRITICAL UPDATE*: Added "N/A" to the end of this empty return list 
+    # to match the new 12-item return limit (to prevent crashes on empty data)
     if df.empty or len(df) < 200: 
-        return 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, [], "N/A", 0
+        return 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, [], "N/A"
     
     receipt = []
     c, o, v = df["Close"].squeeze(), df["Open"].squeeze(), df["Volume"].squeeze()
-    h, l = df["High"].squeeze(), df["Low"].squeeze()
     
+    # Fetching High and Low for candlestick analysis
+    h, l = df["High"].squeeze(), df["Low"].squeeze()
     t_h, t_l = float(h.iloc[-1]), float(l.iloc[-1])
+    
     y_c, t_o, t_v, t_c = float(c.iloc[-2]), float(o.iloc[-1]), float(v.iloc[-1]), float(c.iloc[-1])
     avg_v = float(v.iloc[-11:-1].mean())
-    vol_spike = t_v / avg_v if avg_v > 0 else 1.0 
+    vol_spike = t_v / avg_v if avg_v > 0 else 1.0 # Moved this up slightly so ATR can use it
     
     sma_50 = float(c.rolling(50).mean().iloc[-2])
     sma_200 = float(c.rolling(200).mean().iloc[-2])
@@ -333,219 +317,259 @@ def analyze_technical_metrics(df, df_intra=pd.DataFrame(), is_day_trade=False):
     macd_line, macd_signal, macd_hist = calculate_macd(c)
     bb_upper, bb_lower = calculate_bollinger(c)
 
-    # --- ATR DAILY GAS TANK ---
+    # ==========================================
+    # *NEW* ATR DAILY GAS TANK CALCULATION
+    # ==========================================
     try:
         atr_14 = calculate_atr(df["High"], df["Low"], df["Close"]).iloc[-1]
         today_range = t_h - t_l
         atr_exhaustion = (today_range / atr_14) * 100 if atr_14 > 0 else 0
-        if atr_exhaustion > 110: eod_outlook = f"Peaked ({atr_exhaustion:.0f}%)"
-        elif atr_exhaustion > 85: eod_outlook = f"Exhausting ({atr_exhaustion:.0f}%)"
-        elif atr_exhaustion < 50 and vol_spike > 2.0: eod_outlook = f"Early ({atr_exhaustion:.0f}%)"
-        else: eod_outlook = f"Normal ({atr_exhaustion:.0f}%)"
-        receipt.append(f"**Intraday Fuel**: {eod_outlook}")
+        
+       # Determine the "Day Outlook" Prediction
+        if atr_exhaustion > 110:
+            eod_outlook = f"Peaked ({atr_exhaustion:.0f}%)"
+        elif atr_exhaustion > 85:
+            eod_outlook = f"Exhausting ({atr_exhaustion:.0f}%)"
+        elif atr_exhaustion < 50 and vol_spike > 2.0:
+            eod_outlook = f"Early ({atr_exhaustion:.0f}%)"
+        else:
+            eod_outlook = f"Normal ({atr_exhaustion:.0f}%)"
+            
+        receipt.append(f"**Intraday Fuel**: {eod_outlook} of typical daily move used")
     except:
         eod_outlook = "N/A"
+    # ==========================================
 
-    # --- TIERED GAP & VOLUME ---
     gap_pct = (t_o - y_c) / y_c if y_c > 0 else 0
-    gap_score = 7 if gap_pct > 0.12 else 5 if gap_pct > 0.08 else 3 if gap_pct > 0.05 else 1 if gap_pct > 0.02 else -7 if gap_pct < -0.12 else -5 if gap_pct < -0.08 else -3 if gap_pct < -0.05 else -1 if gap_pct < -0.02 else 0
-    if gap_score != 0: receipt.append(f"**{'+' if gap_score > 0 else ''}{gap_score} pts**: Tiered Gap ({gap_pct*100:.1f}%)")
+    gap_score = 5 if gap_pct > 0.08 else 4 if gap_pct > 0.05 else 2 if gap_pct > 0.02 else -5 if gap_pct < -0.08 else -4 if gap_pct < -0.05 else -2 if gap_pct < -0.02 else 0
+    if gap_score != 0: receipt.append(f"**{'+' if gap_score > 0 else ''}{gap_score} pts**: Gap Size ({gap_pct*100:.2f}%)")
 
-    vol_base = 8 if vol_spike > 5.0 else 5 if vol_spike > 3.0 else 2 if vol_spike > 1.5 else 0
+    vol_base = 6 if vol_spike > 5.0 else 4 if vol_spike > 3.0 else 2 if vol_spike > 1.5 else 0
     vol_score = vol_base if gap_pct >= 0 else -vol_base
-    if vol_score != 0: receipt.append(f"**{'+' if vol_score > 0 else ''}{vol_score} pts**: Tiered Vol ({vol_spike:.1f}x)")
+    if vol_score != 0: receipt.append(f"**{'+' if vol_score > 0 else ''}{vol_score} pts**: Volume Spike ({vol_spike:.1f}x)")
 
-    # --- TREND & OVEREXTENSION ---
     trend_score = 0
     brk_status = "None"
     if y_c < sma_50 and t_o > sma_50:
-        trend_score += 3; brk_status = "Bull 50"; receipt.append("**+3 pts**: 50 SMA Breakout")
+        trend_score += 3
+        brk_status = "Bull 50"
+        receipt.append("**+3 pts**: Bullish 50 SMA Breakout")
     elif y_c > sma_50 and t_o < sma_50:
-        trend_score -= 3; brk_status = "Bear 50"; receipt.append("**-3 pts**: 50 SMA Breakdown")
+        trend_score -= 3
+        brk_status = "Bear 50"
+        receipt.append("**-3 pts**: Bearish 50 SMA Breakdown")
     
-    trend_score += 2 if t_c > sma_200 else -2
-    receipt.append(f"**{'+2' if t_c > sma_200 else '-2'} pts**: {'Above' if t_c > sma_200 else 'Below'} 200 SMA")
+    if t_c > sma_200: 
+        trend_score += 2
+        receipt.append("**+2 pts**: Above 200 SMA Trend")
+    else: 
+        trend_score -= 2
+        receipt.append("**-2 pts**: Below 200 SMA Trend")
 
-    # Overextension Penalty
-    extension_pct = (t_c - sma_50) / sma_50 if sma_50 > 0 else 0
-    if extension_pct > 0.25:
-        trend_score -= 3; receipt.append(f"**-3 pts**: Overextended ({extension_pct*100:.0f}% over 50SMA)")
+    core_score = gap_score + vol_score + trend_score
 
-    # --- CANDLESTICK ANALYSIS (The Trap/Bounce) ---
+    # ==========================================
+    # RISK MANAGEMENT PENALTIES & BONUSES
+    # ==========================================
     candle_range = t_h - t_l
     if candle_range > 0:
-        upper_wick_ratio = (t_h - max(t_o, t_c)) / candle_range
+        # A. The Trap (Shooting Star / Upper Wick)
+        upper_wick = t_h - max(t_o, t_c)
+        upper_wick_ratio = upper_wick / candle_range
         if gap_pct > 0.04 and upper_wick_ratio > 0.5:
-            trend_score -= 5; receipt.append("**-5 pts**: Reversal Risk (Upper Wick)")
+            core_score -= 5
+            receipt.append("**-5 pts**: Reversal Risk (Heavy selling pressure on Gap Up)")
             
-        lower_wick_ratio = (min(t_o, t_c) - t_l) / candle_range
-        if (t_o - t_l) / t_o > 0.02 and lower_wick_ratio > 0.5:
-            trend_score += 3; receipt.append("**+3 pts**: Bullish Bounce (Lower Wick)")
+        # B. The Bounce (Hammer / Lower Wick)
+        lower_wick = min(t_o, t_c) - t_l
+        lower_wick_ratio = lower_wick / candle_range
+        intraday_max_drop = (t_o - t_l) / t_o if t_o > 0 else 0
+        
+        if intraday_max_drop > 0.02 and lower_wick_ratio > 0.5:
+            core_score += 3
+            receipt.append("**+3 pts**: Bullish Reversal (Strong buying pressure off lows)")
 
-    # --- TIERED OSCILLATORS (MACD/BB/RSI) ---
+    # Overextension (Rubber Band) Penalty
+    extension_pct = (t_c - sma_50) / sma_50 if sma_50 > 0 else 0
+    if extension_pct > 0.25:
+        core_score -= 3
+        receipt.append(f"**-3 pts**: Overextended ({extension_pct*100:.1f}% above 50 SMA)")
+    # ==========================================
+
     macd_score = 0
     macd_status = "Neutral"
-    if macd_line.iloc[-1] > macd_signal.iloc[-1] and macd_line.iloc[-2] <= macd_signal.iloc[-2]:
+    if macd_line.iloc[-1] > macd_signal.iloc[-1] and macd_line.iloc[-2] <= macd_signal.iloc[-2]: 
         macd_score += 2; macd_status = "Bull Cross"
-    elif macd_line.iloc[-1] < macd_signal.iloc[-1] and macd_line.iloc[-2] >= macd_signal.iloc[-2]:
+    elif macd_line.iloc[-1] < macd_signal.iloc[-1] and macd_line.iloc[-2] >= macd_signal.iloc[-2]: 
         macd_score -= 2; macd_status = "Bear Cross"
     
-    macd_score += 2 if macd_hist.iloc[-1] > macd_hist.iloc[-2] > 0 else -2 if macd_hist.iloc[-1] < macd_hist.iloc[-2] < 0 else 0
+    if macd_score != 0: receipt.append(f"**{'+' if macd_score > 0 else ''}{macd_score} pts**: MACD ({macd_status})")
+
+    if macd_hist.iloc[-1] > macd_hist.iloc[-2] > 0: 
+        macd_score += 2
+        receipt.append("**+2 pts**: MACD Bullish Histogram Growth")
+    elif macd_hist.iloc[-1] < macd_hist.iloc[-2] < 0: 
+        macd_score -= 2
+        receipt.append("**-2 pts**: MACD Bearish Histogram Drop")
 
     bb_score = 0
-    bb_status = "Inside"
-    if t_c > bb_upper.iloc[-1]: bb_score = 4; bb_status = "Upper Breakout"
-    elif t_c < bb_lower.iloc[-1]: bb_score = -4; bb_status = "Lower Breakdown"
+    bb_status = "Inside Bands"
+    if t_c > bb_upper.iloc[-1]: 
+        bb_score += 4; bb_status = "Upper Breakout"
+        receipt.append("**+4 pts**: Bollinger Upper Breakout")
+    elif t_c < bb_lower.iloc[-1]: 
+        bb_score -= 4; bb_status = "Lower Breakdown"
+        receipt.append("**-4 pts**: Bollinger Lower Breakdown")
 
     rsi_score = 0
-    if rsi < 20: rsi_score = 4
-    elif rsi < 30: rsi_score = 2
-    elif rsi > 80: rsi_score = -4
-    elif rsi > 70: rsi_score = -2
-    # Check for Squeeze Regime (Don't penalize high RSI if breaking out on high volume)
-    if vol_spike > 3.0 and bb_status == "Upper Breakout": rsi_score = max(0, rsi_score)
+    if vol_spike > 3.0 and bb_status == "Upper Breakout":
+        if rsi > 70: 
+            rsi_score = 3
+            receipt.append("**+3 pts**: RSI Overbought (Ignored due to Squeeze Regime)")
+    elif vol_spike > 3.0 and bb_status == "Lower Breakdown":
+        if rsi < 30: 
+            rsi_score = -3
+            receipt.append("**-3 pts**: RSI Oversold (Ignored due to Panic Regime)")
+    else:
+        if rsi < 30: 
+            rsi_score = 3
+            receipt.append(f"**+3 pts**: RSI Oversold ({rsi:.1f})")
+        elif rsi < 40: 
+            rsi_score = 1
+            receipt.append(f"**+1 pt**: RSI Cooling ({rsi:.1f})")
+        elif rsi > 70: 
+            rsi_score = -3
+            receipt.append(f"**-3 pts**: RSI Overbought ({rsi:.1f})")
+        elif rsi > 60: 
+            rsi_score = -1
+            receipt.append(f"**-1 pt**: RSI Heating Up ({rsi:.1f})")
 
-    # --- MOMENTUM ---
+    osc_score = macd_score + bb_score + rsi_score
+
     wk = (t_c - float(c.iloc[-6])) / float(c.iloc[-6])
     mo = (t_c - float(c.iloc[-22])) / float(c.iloc[-22])
     mom_score = 0
-    if wk > 0.05: mom_score += 2
-    if mo > 0.10: mom_score += 2
-
-    # --- DAY TRADING INTRADAY LOGIC ---
-    intra_score = 0
-    if is_day_trade:
-        trend_score = int(trend_score * 0.5) # De-weight daily averages
-        if not df_intra.empty:
-            vwap = ((df_intra['High'] + df_intra['Low'] + df_intra['Close'])/3 * df_intra['Volume']).cumsum() / df_intra['Volume'].cumsum()
-            c_price = df_intra['Close'].iloc[-1]
-            if c_price > vwap.iloc[-1]:
-                intra_score += 6; receipt.append("**+6 pts**: Above VWAP")
-            else:
-                intra_score -= 5; receipt.append("**-5 pts**: Below VWAP")
-
-    core_score = gap_score + vol_score + trend_score
-    osc_score = macd_score + bb_score + rsi_score
+    if wk > 0.05: 
+        mom_score += 2
+        receipt.append("**+2 pts**: 1-Week Momentum (>5%)")
+    elif wk < -0.05: 
+        mom_score -= 2
+        receipt.append("**-2 pts**: 1-Week Momentum (< -5%)")
     
-    return core_score, osc_score, mom_score, sma_50, rsi, vol_spike, gap_pct, brk_status, macd_status, bb_status, receipt, eod_outlook, intra_score
+    if mo > 0.10: 
+        mom_score += 2
+        receipt.append("**+2 pts**: 1-Month Momentum (>10%)")
+    elif mo < -0.10: 
+        mom_score -= 2
+        receipt.append("**-2 pts**: 1-Month Momentum (< -10%)")
+
+    # *CRITICAL UPDATE*: eod_outlook added to the very end of this return statement!
+    return core_score, osc_score, mom_score, sma_50, rsi, vol_spike, gap_pct, brk_status, macd_status, bb_status, receipt, eod_outlook
 
 
-def process_ticker(ticker, company_name, p_min, v_min, min_yield_filter, last_price_memory, is_day_trade=False):
+def process_ticker(ticker, company_name, p_min, v_min, min_yield_filter, last_price_memory):
+    df = get_price_data(ticker)
+    if df.empty or len(df) < 200: return None
+    
+    latest_close = float(df["Close"].squeeze().iloc[-1])
+    avg_vol = float(df["Volume"].squeeze().iloc[-11:-1].mean())
+    if latest_close < p_min or avg_vol < v_min: return None
+
     try:
-        df_daily, df_intra = get_price_data(ticker, fetch_intraday=is_day_trade)
-        if df_daily.empty or len(df_daily) < 200: return None
+        if 'Dividends' in df.columns:
+            annual_dividend = float(df['Dividends'].sum())
+            yield_pct = (annual_dividend / latest_close) * 100 if latest_close > 0 else 0.0
+        else: yield_pct = 0.0
+    except: yield_pct = 0.0
         
-        latest_close = float(df_daily["Close"].squeeze().iloc[-1])
-        avg_vol = float(df_daily["Volume"].squeeze().iloc[-11:-1].mean())
-        if latest_close < p_min or avg_vol < v_min: return None
+    if min_yield_filter > 0 and yield_pct < min_yield_filter: return None
 
-        # Dividend Yield Filter
-        try:
-            if 'Dividends' in df_daily.columns:
-                annual_dividend = float(df_daily['Dividends'].sum())
-                yield_pct = (annual_dividend / latest_close) * 100 if latest_close > 0 else 0.0
-            else: yield_pct = 0.0
-        except: yield_pct = 0.0
-            
-        if min_yield_filter > 0 and yield_pct < min_yield_filter: return None
-
-        if last_price_memory == 0.0: last_price_memory = latest_close
-
-        # Unpack the 13 variables from analysis
-        core_score, osc_score, mom_score, sma_50, rsi, vol, gap, brk, macd_st, bb_st, receipt, eod_outlook, intra_score = analyze_technical_metrics(df_daily, df_intra, is_day_trade)
+    if last_price_memory == 0.0: last_price_memory = latest_close
         
-        cat_score = mom_score + intra_score 
-        short_val = 0.0
-        sent_label = "Neutral"
-        upc = "None"
-        news = []
+    # Update this line:
+    core_score, osc_score, mom_score, sma_50, rsi, vol, gap, brk, macd_st, bb_st, receipt, eod_outlook = analyze_technical_metrics(df)
+    
+    cat_score = mom_score
+    short_val = 0.0
+    sent_label = "Neutral"
+    upc = "None"
+    news = []
 
-        # --- STAGE 2: FUNDAMENTALS & NEWS ---
-        if abs(core_score + osc_score) >= 4:
-            news, short_val, pe_ratio, profit_margin = fetch_stage2_data(ticker, company_name)
-            
-            # Fundamental Scoring
-            if pe_ratio > 0 and pe_ratio < 15:
-                cat_score += 2
-                receipt.append(f"**+2 pts**: Value Stock (P/E {pe_ratio:.1f})")
-            elif pe_ratio > 50:
-                cat_score -= 2
-                receipt.append(f"**-2 pts**: Overvalued (P/E {pe_ratio:.1f})")
-                
-            if profit_margin > 0.20:
-                cat_score += 2
-                receipt.append(f"**+2 pts**: High Profitability (>{profit_margin*100:.1f}% Margins)")
-            elif profit_margin < 0:
-                cat_score -= 2
-                receipt.append(f"**-2 pts**: Unprofitable Company")
-            
-            # Short Squeeze Scoring
-            if short_val > 10.0:
-                if latest_close > sma_50: 
-                    cat_score += 4
-                    receipt.append(f"**+4 pts**: Squeeze Setup (>10% Short + Above 50 SMA)")
-                elif latest_close < sma_50: 
-                    cat_score -= 4
-                    receipt.append(f"**-4 pts**: Short Breakdown (>10% Short + Below 50 SMA)")
-
-            # AI Sentiment Scoring
-            if news and 'finbert' in globals():
-                pos_c, neg_c = 0, 0
-                for a in news:
-                    try:
-                        res = finbert(a["title"])[0]
-                        if res['label'] == 'positive': pos_c += 1
-                        elif res['label'] == 'negative': neg_c += 1
-                    except: pass
-                
-                sent_s = 3 if pos_c > neg_c else -3 if neg_c > pos_c else 0
-                sent_label = "Positive" if sent_s > 0 else "Negative" if sent_s < 0 else "Neutral"
-                cat_score += sent_s
-                if sent_s != 0: receipt.append(f"**{'+' if sent_s > 0 else ''}{sent_s} pts**: AI News Sentiment ({sent_label})")
-
-                now = datetime.now(timezone.utc)
-                for a in news:
-                    t, d = a["title"].lower(), (now - a["published"]).days if a["published"] else 10
-                    if any(k in t for k in ["results","earnings","update"]) and d <= 5: 
-                        bonus = 2 if sent_s >= 0 else -2
-                        cat_score += bonus
-                        receipt.append(f"**{'+' if bonus > 0 else ''}{bonus} pts**: Recent Earnings/Update Catalyst")
-                        break
-                        
-                    if any(e in t for e in ["results", "earnings"]) and any(f in t for f in ["upcoming", "expected", "tomorrow"]): 
-                        upc = "Upcoming Event"
-
-        # Final Total Score
-        total_score = core_score + osc_score + cat_score
+    if abs(core_score + osc_score) >= 4:
+        # *NEW* Unpacking the new fundamental variables
+        news, short_val, pe_ratio, profit_margin = fetch_stage2_data(ticker, company_name)
         
-        # Select Label based on Mode
-        if is_day_trade:
-            if total_score >= 32: label = "🔥 PRIME DAY-TRADE"
-            elif total_score >= 20: label = "🟢 MOMENTUM LONG"
-            elif total_score >= 12:  label = "🟡 WATCH LONG"
-            elif total_score <= -32: label = "🩸 PRIME SHORT"
-            elif total_score <= -20: label = "🔴 MOMENTUM SHORT"
-            else: label = "⚪ CHOP (AVOID)"
-        else:
-            if total_score >= 25: label = "🔥 PRIME BULL"
-            elif total_score >= 15: label = "🟢 SWING BULL"
-            elif total_score >= 8:  label = "🟡 TREND BULL"
-            elif total_score <= -25: label = "🩸 PRIME BEAR"
-            elif total_score <= -15: label = "🔴 SWING BEAR"
-            elif total_score <= -8:  label = "🟠 TREND BEAR"
-            else: label = "⚪ NEUTRAL"
+        # ==========================================
+        # *NEW* FUNDAMENTAL SCORING LOGIC
+        # ==========================================
+        if pe_ratio > 0 and pe_ratio < 15:
+            cat_score += 2
+            receipt.append(f"**+2 pts**: Value Stock (P/E {pe_ratio:.1f})")
+        elif pe_ratio > 50:
+            cat_score -= 2
+            receipt.append(f"**-2 pts**: Overvalued (P/E {pe_ratio:.1f})")
+            
+        if profit_margin > 0.20:
+            cat_score += 2
+            receipt.append(f"**+2 pts**: High Profitability (>{profit_margin*100:.1f}% Margins)")
+        elif profit_margin < 0:
+            cat_score -= 2
+            receipt.append(f"**-2 pts**: Unprofitable Company")
+        # ==========================================
+        
+        if short_val > 10.0:
+            if latest_close > sma_50: 
+                cat_score += 4
+                receipt.append(f"**+4 pts**: Squeeze Setup (>10% Short + Above 50 SMA)")
+            elif latest_close < sma_50: 
+                cat_score -= 4
+                receipt.append(f"**-4 pts**: Short Breakdown (>10% Short + Below 50 SMA)")
 
-        return {
-            "Signal": label, "Ticker": ticker, "Company": company_name, "Day Outlook": eod_outlook, "Total Score": total_score,
-            "Core Tech Score": core_score, "Oscillator Score": osc_score, "Catalyst Score": cat_score,
-            "Price ($)": latest_close, "Gap %": gap * 100, "Vol Spike (x)": vol, "RSI": rsi, 
-            "Short Int %": short_val, "Yield %": yield_pct, "MACD Status": macd_st, "BB Status": bb_st,
-            "Breakout": brk, "AI Sentiment": sent_label, "Upcoming Event": upc,
-            "Score Receipt": receipt,
-            "Headlines": [n["title"] for n in news] if news else ["Skipped AI: Insufficient technical movement"]
-        }
-    except Exception as e:
-        return None
+        if news and finbert:
+            pos_c, neg_c = 0, 0
+            for a in news:
+                try:
+                    res = finbert(a["title"])[0]
+                    if res['label'] == 'positive': pos_c += 1
+                    elif res['label'] == 'negative': neg_c += 1
+                except: pass
+            
+            sent_s = 3 if pos_c > neg_c else -3 if neg_c > pos_c else 0
+            sent_label = "Positive" if sent_s > 0 else "Negative" if sent_s < 0 else "Neutral"
+            cat_score += sent_s
+            if sent_s != 0: receipt.append(f"**{'+' if sent_s > 0 else ''}{sent_s} pts**: AI News Sentiment ({sent_label})")
+
+            now = datetime.now(timezone.utc)
+            for a in news:
+                t, d = a["title"].lower(), (now - a["published"]).days if a["published"] else 10
+                if any(k in t for k in ["results","earnings","update"]) and d <= 5: 
+                    bonus = 2 if sent_s >= 0 else -2
+                    cat_score += bonus
+                    receipt.append(f"**{'+' if bonus > 0 else ''}{bonus} pts**: Recent Earnings/Update Catalyst")
+                    break
+                    
+                if any(e in t for e in ["results", "earnings"]) and any(f in t for f in ["upcoming", "expected", "tomorrow"]): 
+                    upc = "Upcoming Event"
+
+    total_score = core_score + osc_score + cat_score
+    
+    if total_score >= 25: label = "🔥 PRIME BULL"
+    elif total_score >= 15: label = "🟢 SWING BULL"
+    elif total_score >= 8:  label = "🟡 TREND BULL"
+    elif total_score <= -25: label = "🩸 PRIME BEAR"
+    elif total_score <= -15: label = "🔴 SWING BEAR"
+    elif total_score <= -8:  label = "🟠 TREND BEAR"
+    else: label = "⚪ NEUTRAL"
+
+    return {
+        "Signal": label, "Ticker": ticker, "Company": company_name, "Day Outlook": eod_outlook, "Total Score": total_score,
+        "Core Tech Score": core_score, "Oscillator Score": osc_score, "Catalyst Score": cat_score,
+        "Price ($)": latest_close, "Gap %": gap * 100, "Vol Spike (x)": vol, "RSI": rsi, 
+        "Short Int %": short_val, "Yield %": yield_pct, "MACD Status": macd_st, "BB Status": bb_st,
+        "Breakout": brk, "AI Sentiment": sent_label, "Upcoming Event": upc,
+        "Score Receipt": receipt,
+        "Headlines": [n["title"] for n in news] if news else ["Skipped AI: Insufficient technical movement"]
+    }
 
 def generate_mini_chart(df, ticker, company_name, chart_type):
     df_chart = df.tail(30)
@@ -648,7 +672,7 @@ with tab1:
         results, progress_bar, status_text = [], st.progress(0), st.empty()
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {executor.submit(process_ticker, t[0], t[1], min_price, min_vol, min_yield, st.session_state.last_prices.get(t[0], 0.0), day_trading_mode): t[0] for t in final_target_list}
+            futures = {executor.submit(process_ticker, t[0], t[1], min_price, min_vol, min_yield, st.session_state.last_prices.get(t[0], 0.0)): t[0] for t in final_target_list}
             for i, future in enumerate(concurrent.futures.as_completed(futures)):
                 ticker = futures[future]
                 try:
@@ -749,10 +773,7 @@ with tab1:
                     st.markdown("### Latest News")
                     for h in row["Headlines"][:4]: st.markdown(f"- {h}")
                 with c2:
-                    # Unpack the two returned dataframes, but we only need the daily one (df_chart) for this chart
-                    df_chart, df_intra = get_price_data(row['Ticker'])
-            
-                    if not df_chart.empty:
+                    if not (df_chart := get_price_data(row['Ticker'])).empty:
                         st.plotly_chart(generate_mini_chart(df_chart, row['Ticker'], row['Company'], chart_preference), use_container_width=True)
 
 # ==========================================
@@ -831,7 +852,7 @@ with tab4:
             try:
                 # Call your master function directly! 
                 # We pass 0 for all filters so we don't accidentally hide stocks you own
-                result = process_ticker(tick, company_name, p_min=0, v_min=0, min_yield_filter=0, last_price_memory=0.0, is_day_trade=False)
+                result = process_ticker(tick, company_name, p_min=0, v_min=0, min_yield_filter=0, last_price_memory=0.0)
                 
                 if result is not None:
                     live_signal = result["Signal"]
